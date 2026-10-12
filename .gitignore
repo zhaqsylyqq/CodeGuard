@@ -1,6 +1,17 @@
-﻿.venv/
+# environments
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+
+# data and run artefacts (never committed)
 data/raw/
 data/processed/
-__pycache__/
-.ipynb_checkpoints/
+runs/
 *.zip
+
+# tooling caches
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
