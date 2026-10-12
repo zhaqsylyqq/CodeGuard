@@ -1,0 +1,21 @@
+# Default experiment dataset for the prototype tier: 5k bug-fix pairs
+# (= 10k classification rows), split 80/10/10 by project.
+name: ctssb_5k
+tier: prototype
+source:
+  name: ctssb
+  path: data/raw/ctssb/ctssb_data_1M
+filters:
+  likely_bug: true
+  in_function: true
+  single_hunk: true
+  drop_python2: false   # measured and reported, not filtered (see docs/data.md)
+split:
+  group_key: project    # project *name*: forks share it, so they stay together
+  val: 0.1
+  test: 0.1
+  drop_cross_split_duplicates: true
+sample:
+  n_pairs: 5000
+seed: 42
+output_dir: data/processed/ctssb_5k

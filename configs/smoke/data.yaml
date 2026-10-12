@@ -1,0 +1,12 @@
+# Smoke tier: reads only the first 3000 raw records, keeps ~100 pairs.
+# Purpose: exercise the whole pipeline end to end in seconds on CPU.
+name: ctssb_smoke
+tier: smoke
+source:
+  name: ctssb
+  path: data/raw/ctssb/ctssb_data_1M
+  max_rows: 3000
+sample:
+  n_pairs: 100
+seed: 42
+output_dir: data/processed/ctssb_smoke

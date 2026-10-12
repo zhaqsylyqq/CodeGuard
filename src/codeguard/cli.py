@@ -35,7 +35,20 @@ def _not_ready(stage: str) -> None:
 @app.command("prepare-data")
 def prepare_data(config: ConfigOpt, override: OverrideOpt = None) -> None:
     """Filter, rebuild, deduplicate, split and sample a bug-fix dataset."""
-    _not_ready("stage 1")
+    from codeguard.config import DataConfig, load_config
+    from codeguard.data.pipeline import prepare
+
+    cfg = load_config(config, DataConfig, override)
+    manifest = prepare(cfg)
+
+    typer.echo(f"\nDataset '{cfg.name}' -> {cfg.output_dir}")
+    for step, n in manifest["funnel"].items():
+        typer.echo(f"  {step:<28} {n:>9,}")
+    for split, stats in manifest["sample"]["splits"].items():
+        typer.echo(f"  {split:<6} pairs={stats['pairs']:>7,}  projects={stats['groups']:>6,}")
+    leak = manifest["leakage"]["sample"]
+    typer.echo(f"  shared projects: {leak['shared_groups']}")
+    typer.echo(f"  cross-split snippet duplicates: {leak['cross_split_snippet_duplicates']}")
 
 
 @app.command()

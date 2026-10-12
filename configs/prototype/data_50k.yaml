@@ -1,0 +1,21 @@
+# Full-scale sample (50k pairs). Same pool, seed and split as data_5k.yaml,
+# so the 5k sample is a subset of this one, split by split.
+name: ctssb_50k
+tier: prototype
+source:
+  name: ctssb
+  path: data/raw/ctssb/ctssb_data_1M
+filters:
+  likely_bug: true
+  in_function: true
+  single_hunk: true
+  drop_python2: false
+split:
+  group_key: project
+  val: 0.1
+  test: 0.1
+  drop_cross_split_duplicates: true
+sample:
+  n_pairs: 50000
+seed: 42
+output_dir: data/processed/ctssb_50k
