@@ -14,7 +14,7 @@ data/raw/            original CTSSB-1M shards (not in git)
 data/processed/      pool.parquet, train/val/test.parquet (not in git)
 notebooks/
   01_data.ipynb      data preparation + EDA plots
-  02_baseline.ipynb  TF-IDF + logistic regression (next step)
+  02_baseline.ipynb  TF-IDF + logistic regression baseline
 src/data_utils.py    reusable data functions
 tests/               unit tests for data_utils
 results/             summary.json and figures
@@ -58,3 +58,15 @@ The first run reads all shards (about 2 minutes) and caches the result in `data/
 
 Python 2 share: 4.9% of the pool, 5.1% of the sample. No project or snippet is shared between splits.
 Full numbers: `results/summary.json`.
+
+## Baseline (TF-IDF + Logistic Regression, validation set)
+
+| Metric | Value |
+|---|---|
+| Accuracy | 0.503 |
+| Precision | 0.506 |
+| Recall | 0.274 |
+| F1 | 0.355 |
+
+The baseline is at chance level (classes are 50/50): buggy and fixed snippets share almost all tokens,
+so a bag-of-tokens model cannot tell them apart. Details: `notebooks/02_baseline.ipynb`, `results/baseline_metrics.json`.

@@ -225,3 +225,17 @@ def sample_pairs(df, sizes, seed=42):
     """Random sample per split, e.g. sizes={"train": 4000, "val": 500, "test": 500}."""
     parts = [df[df["split"] == name].sample(n=n, random_state=seed) for name, n in sizes.items()]
     return pd.concat(parts, ignore_index=True)
+
+
+# ------------------------------------------------------------ classification
+
+
+def pairs_to_examples(df):
+    """Turn each (buggy, fixed) pair into two labelled examples: buggy=1, fixed=0.
+
+    Each pair gives one positive and one negative example, so the classes are
+    balanced by construction (50/50). `pair` links both examples of one pair.
+    """
+    buggy = pd.DataFrame({"pair": df.index, "text": df["buggy"].to_numpy(), "label": 1})
+    fixed = pd.DataFrame({"pair": df.index, "text": df["fixed"].to_numpy(), "label": 0})
+    return pd.concat([buggy, fixed], ignore_index=True)

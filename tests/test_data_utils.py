@@ -10,6 +10,7 @@ from data_utils import (
     code_hash,
     is_python2,
     normalize_code,
+    pairs_to_examples,
     rebuild_snippets,
     remove_cross_split_duplicates,
     split_by_project,
@@ -83,3 +84,11 @@ def test_remove_cross_split_duplicates():
     clean, dropped = remove_cross_split_duplicates(df)
     assert dropped == {"val": 1, "test": 0}  # the dropped val row no longer counts
     assert list(clean["split"]) == ["train", "test"]
+
+
+def test_pairs_to_examples_gives_balanced_labels():
+    df = pd.DataFrame({"buggy": ["a = 1", "b = 2"], "fixed": ["a = 2", "b = 3"]})
+    examples = pairs_to_examples(df)
+    assert len(examples) == 4
+    assert examples["label"].tolist() == [1, 1, 0, 0]
+    assert examples.loc[examples["label"] == 1, "text"].tolist() == ["a = 1", "b = 2"]

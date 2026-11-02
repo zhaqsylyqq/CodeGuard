@@ -1,0 +1,10 @@
+{
+  "accuracy": 0.503,
+  "precision": 0.5055,
+  "recall": 0.274,
+  "f1": 0.3554,
+  "pair_accuracy": 0.528,
+  "pairs_with_identical_scores": 0.13,
+  "train_accuracy": 0.5775,
+  "n_features": 107020
+}
