@@ -1,7 +1,10 @@
 import sys
+import gzip
+import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -9,12 +12,42 @@ from data_utils import (
     check_leakage,
     code_hash,
     is_python2,
+    load_pool,
     normalize_code,
     pairs_to_examples,
     rebuild_snippets,
     remove_cross_split_duplicates,
     split_by_project,
 )
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_load_pool_accepts_plain_and_compressed_jsonl(tmp_path, compressed):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    rows = [
+        {"project": "demo", "file_path": "a.py", "likely_bug": True,
+         "in_function": inside, "diff": "@@ -1 +1 @@\n-a\n+b\n", "sstub_pattern": "CHANGE"}
+        for inside in (True, False)
+    ]
+    text = "\n".join(json.dumps(row) for row in rows)
+    plain = raw / "file-0.jsonl"
+    plain.write_text(text, encoding="utf-8")
+    if compressed:
+        with gzip.open(raw / "file-0.jsonl.gz", "wt", encoding="utf-8") as stream:
+            stream.write(text)
+    output = tmp_path / "processed" / "pool.parquet"
+    pool, n_raw = load_pool(raw, output)
+    assert n_raw == 2
+    assert len(pool) == 1
+    cached, cached_count = load_pool(raw, output)
+    pd.testing.assert_frame_equal(cached, pool.reset_index(drop=True))
+    assert cached_count == n_raw
+
+
+def test_load_pool_missing_files_explains_expected_path(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Place the CTSSB files"):
+        load_pool(tmp_path / "missing", tmp_path / "pool.parquet")
 
 DIFF = (
     "@@ -1,4 +1,4 @@ header\n"

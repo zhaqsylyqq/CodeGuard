@@ -1,20 +1,35 @@
-# Roadmap: from prototype to server scale
+# CodeGuard roadmap
 
-The current scope is a **prototype**: a CTSSB-1M subset (~5k pairs), classical and
-BiLSTM baselines, DeepSeek-Coder-1.3B (zero-shot and QLoRA on a Colab T4),
-evaluation and a minimal FastAPI demo. Everything below is planned, not built.
-Each item lists the extension point it plugs into, so none of it requires
-rewriting core code.
+The repository uses small Python modules and notebooks. This replaces references
+to the archived old-pipeline architecture.
 
-| Item | Extension point | Notes |
+| Stage | Implementation | Experiment status |
 |---|---|---|
-| 50k+ pair training set | `configs/*/data_*.yaml` (`sample.n_pairs`) | Pipeline already handles it; splits are nested, so the prototype test set stays inside the large test set |
-| DeepSeek-Coder 6.7B / 33B (QLoRA) | new YAML in `configs/server/`, same registered LLM model class | 33B: `device_map="auto"` over 2 GPUs |
-| Parallel runs on 6x RTX 4090 | launcher script + `CUDA_VISIBLE_DEVICES` per run | one process per GPU (pair), each writes its own `runs/` directory |
-| Server runbook + pre-flight check | `docs/server_runbook.md`, `scripts/preflight.sh` | nvidia-smi, disk, pre-downloaded weights (`huggingface-cli download`), time plan |
-| Docker image | `Dockerfile` (CUDA base) + `requirements-gpu.txt` | reproducible server environment in one command |
-| CI | GitHub Actions: ruff + pytest + smoke config | the smoke config already runs on CPU in minutes |
-| Experiment tracking | MLflow / W&B offline, hooked into `utils/run.py` | `results/results.csv` remains the source of truth |
-| CodeXGLUE code refinement (Java) | new `DATASETS` entry | secondary fix-generation benchmark; identifiers are abstracted |
-| JavaScript via FixJS | new `DATASETS` entry + language field | diff reconstruction is language-agnostic |
-| Near-duplicate detection | `data/split.py` (MinHash/LSH) | the prototype only removes exact duplicates |
+| 1. Data | 01_data.ipynb, src/data_utils.py | Completed earlier: 4000/500/500 project-separated pairs |
+| 2. TF-IDF | 02_baseline.ipynb | Completed earlier: validation accuracy 0.503 |
+| 3. BiLSTM | 03_bilstm.ipynb, src/bilstm.py | Implemented; full CTSSB run pending |
+| 4. DeepSeek zero-shot | 04_deepseek_baseline.ipynb, src/llm_baseline.py | Answer likelihood scoring implemented; real weights evaluation pending |
+| 5. LoRA / QLoRA | 05_lora.ipynb, src/train_lora.py | Rank 8/16/32 supported; CUDA/CTSSB experiments pending |
+| 6. Fix generation | Not implemented | Separate repair prompt, training targets, exact match and BLEU/CodeBLEU on 200–500 pairs |
+| 7. Server | Not implemented | Pre-download weights, preflight, 6.7B first, 33B if memory/time permits; 50k pairs |
+| 8. Demo / report | Not implemented | FastAPI inference, results table, error analysis, limitations |
+
+## Immediate next steps
+
+1. Restore data/processed/train.parquet and val.parquet, or rerun notebook 01.
+2. Run tests and short smoke runs before full experiments.
+3. Train BiLSTM; evaluate DeepSeek-1.3B with the same quantization used for QLoRA.
+4. Train ranks 8, 16, 32 separately and select using validation F1.
+5. Preserve settings, weight revision, hardware, metrics and adapters outside ephemeral Colab storage.
+6. Freeze choices before final test evaluation. Never select a rank on test.
+
+## Later extensions
+
+- Increase pair sampling in notebook 01; explicitly check overlap with earlier splits.
+  Nested samples are not currently guaranteed.
+- Try server model IDs through --model, after a small compatibility and memory check.
+  Multi-GPU training and a six-GPU launcher have not been implemented.
+- Add near-duplicate detection beyond exact hashes.
+- Add experiment aggregation after real runs; synthetic checks are not benchmark results.
+
+Commands and explanations: [PROJECT_GUIDE_RU.md](PROJECT_GUIDE_RU.md), sections 13–18.

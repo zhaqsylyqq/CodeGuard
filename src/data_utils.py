@@ -49,12 +49,23 @@ def load_pool(raw_dir, pool_path):
         n_raw = json.loads(info_path.read_text())["n_raw"]
         return pd.read_parquet(pool_path), n_raw
 
-    shards = sorted(
-        Path(raw_dir).glob("file-*.jsonl.gz"), key=lambda p: int(re.findall(r"\d+", p.name)[0])
-    )
+    raw_dir = Path(raw_dir)
+    shards_by_number = {}
+    for pattern in ("file-*.jsonl", "file-*.jsonl.gz"):
+        for path in raw_dir.glob(pattern):
+            match = re.fullmatch(r"file-(\d+)\.jsonl(?:\.gz)?", path.name)
+            if match:
+                shards_by_number[int(match[1])] = path
+    shards = [shards_by_number[number] for number in sorted(shards_by_number)]
+    if not shards:
+        raise FileNotFoundError(
+            f"No file-*.jsonl or file-*.jsonl.gz shards found in {raw_dir.resolve()}. "
+            "Place the CTSSB files there or update RAW_DIR in the notebook."
+        )
     parts, n_raw = [], 0
     for shard in tqdm(shards, desc="reading shards"):
-        with gzip.open(shard, "rt", encoding="utf-8") as f:
+        open_shard = gzip.open if shard.suffix == ".gz" else open
+        with open_shard(shard, "rt", encoding="utf-8") as f:
             df = pd.read_json(f, lines=True, dtype=False)[
                 KEEP_COLUMNS
             ]  # dtype=False: keep text as text

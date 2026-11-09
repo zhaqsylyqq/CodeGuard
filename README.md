@@ -16,6 +16,9 @@ notebooks/
   01_data.ipynb      data preparation + EDA plots
   02_baseline.ipynb  TF-IDF + logistic regression baseline
 src/data_utils.py    reusable data functions
+src/bilstm.py        sequence baseline training
+src/llm_baseline.py  DeepSeek answer likelihood evaluation
+src/train_lora.py    LoRA / QLoRA training
 tests/               unit tests for data_utils
 results/             summary.json and figures
 ```
@@ -58,6 +61,28 @@ The first run reads all shards (about 2 minutes) and caches the result in `data/
 
 Python 2 share: 4.9% of the pool, 5.1% of the sample. No project or snippet is shared between splits.
 Full numbers: `results/summary.json`.
+
+## Neural experiments (stages 3–5)
+
+Implementation is available in notebooks `03_bilstm.ipynb`,
+`04_deepseek_baseline.ipynb`, and `05_lora.ipynb`. Full CTSSB neural results
+have not been measured in this checkout; processed data is not included.
+
+```powershell
+python -m pip install -r requirements-neural.txt
+python -m pytest tests -q
+python src/bilstm.py --output runs/bilstm
+python src/llm_baseline.py --quantized --output runs/deepseek_zero_shot
+python src/train_lora.py --quantized --rank 8 --output runs/qlora_r8
+python src/train_lora.py --quantized --rank 16 --output runs/qlora_r16
+python src/train_lora.py --quantized --rank 32 --output runs/qlora_r32
+```
+
+4-bit mode requires CUDA and bitsandbytes. Omit `--quantized` for ordinary LoRA.
+Use `--limit-pairs 8 --batch-size 1` for an initial smoke run, with `--epochs 1`
+for training. Outputs go to `runs/` (ignored by git). These commands use validation;
+test is reserved for the final evaluation. See the Russian guide, sections 13–18,
+for Colab setup, output formats, scoring details and limitations.
 
 ## Baseline (TF-IDF + Logistic Regression, validation set)
 

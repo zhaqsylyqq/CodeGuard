@@ -1,0 +1,85 @@
+"""Train one LoRA rank per run; compare ranks on validation F1."""
+
+import argparse
+import json
+from pathlib import Path
+
+import torch
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from transformers import Trainer, TrainingArguments
+
+from experiment_utils import load_examples, save_report, seed_everything
+from llm_utils import ANSWERS, MODEL_ID, AnswerCollator, encode_candidate, load_model, predict_buggy
+
+
+def training_items(examples, tokenizer, max_length):
+    return [encode_candidate(tokenizer, row.text, ANSWERS[row.label], max_length)[0]
+            for row in examples.itertuples()]
+
+
+def run(args):
+    seed_everything(args.seed)
+    train = load_examples(args.data_dir, "train", args.limit_pairs, args.seed)
+    val = load_examples(args.data_dir, "val", args.limit_pairs, args.seed)
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    model, tokenizer = load_model(args.model, args.quantized, args.revision)
+    model.config.use_cache = False
+    if args.quantized:
+        model = prepare_model_for_kbit_training(model)
+    model = get_peft_model(model, LoraConfig(
+        task_type="CAUSAL_LM", r=args.rank, lora_alpha=2 * args.rank,
+        lora_dropout=0.05, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], bias="none"))
+    model.print_trainable_parameters()
+    settings = TrainingArguments(
+        output_dir=str(output / "checkpoints"), num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size, per_device_eval_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.accumulation_steps, learning_rate=args.lr,
+        eval_strategy="epoch", save_strategy="epoch", save_total_limit=1,
+        load_best_model_at_end=True, metric_for_best_model="eval_loss", greater_is_better=False,
+        fp16=torch.cuda.is_available(), gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        logging_steps=10, report_to="none", seed=args.seed, data_seed=args.seed,
+        dataloader_pin_memory=torch.cuda.is_available(),
+        remove_unused_columns=False, label_names=["labels"],
+    )
+    trainer = Trainer(model=model, args=settings,
+                      train_dataset=training_items(train, tokenizer, args.max_length),
+                      eval_dataset=training_items(val, tokenizer, args.max_length),
+                      data_collator=AnswerCollator(tokenizer.pad_token_id))
+    trainer.train()
+    adapter = output / "adapter"
+    model.save_pretrained(adapter)
+    tokenizer.save_pretrained(adapter)
+    model.gradient_checkpointing_disable()
+    probabilities, truncated = predict_buggy(model, tokenizer, val.text, args.max_length, args.batch_size)
+    report = save_report(output, val, probabilities, {
+        "model": args.model, "revision": args.revision, "method": "qlora" if args.quantized else "lora",
+        "rank": args.rank, "split": "val", "seed": args.seed, "settings": vars(args),
+        "truncated_examples": truncated, "best_checkpoint": trainer.state.best_model_checkpoint,
+        "history": trainer.state.log_history,
+    })
+    print(json.dumps(report, indent=2))
+    return report
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--model", default=MODEL_ID)
+    p.add_argument("--revision")
+    p.add_argument("--data-dir", default="data/processed")
+    p.add_argument("--output", required=True)
+    p.add_argument("--rank", type=int, choices=[8, 16, 32], default=16)
+    p.add_argument("--quantized", action="store_true")
+    p.add_argument("--epochs", type=float, default=3)
+    p.add_argument("--batch-size", type=int, default=2)
+    p.add_argument("--accumulation-steps", type=int, default=8)
+    p.add_argument("--lr", type=float, default=2e-4)
+    p.add_argument("--max-length", type=int, default=512)
+    p.add_argument("--limit-pairs", type=int)
+    p.add_argument("--seed", type=int, default=42)
+    return p
+
+
+if __name__ == "__main__":
+    run(parser().parse_args())
