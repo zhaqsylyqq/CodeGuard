@@ -1,7 +1,14 @@
-"""The same prompt and answer likelihood are used before and after LoRA."""
+"""Model loading shared by all LLM scripts, plus the legacy detection prompt and scoring.
+
+The classification prompt and answer likelihood (`predict_buggy`) are used before and after LoRA,
+so zero-shot and fine-tuned detection stay comparable. Do not change their behaviour.
+"""
+
+import time
 
 import torch
 from torch.nn import functional as F
+from transformers import TrainerCallback
 
 
 MODEL_ID = "deepseek-ai/deepseek-coder-1.3b-base"
@@ -32,27 +39,86 @@ def encode_candidate(tokenizer, code, answer, max_length=512):
             "labels": [-100] * len(prompt) + target}, truncated
 
 
-def load_model(model_id=MODEL_ID, quantized=False, revision=None):
+# ---------------------------------------------------------------- devices and loading
+
+
+def resolve_dtype(dtype="auto"):
+    """'auto' means bf16 on a CUDA GPU that supports it, fp16 on older GPUs, fp32 on CPU."""
+    if dtype != "auto":
+        return {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[dtype]
+    if not torch.cuda.is_available():
+        return torch.float32
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
+def require_single_gpu():
+    """Training uses exactly one GPU. With several visible, Trainer would silently use all of them."""
+    count = torch.cuda.device_count()
+    if count > 1:
+        raise SystemExit(
+            f"{count} GPUs are visible, but training must run on exactly one. "
+            "Select one, for example: CUDA_VISIBLE_DEVICES=0 python src/train_repair.py ..."
+        )
+
+
+def load_model(model_id=MODEL_ID, quantized=False, revision=None, dtype="auto", multi_gpu=False):
+    """Load a causal LM and its tokenizer.
+
+    quantized: 4-bit NF4 weights with `dtype` compute (QLoRA). multi_gpu: spread the layers over
+    all visible GPUs with device_map="auto" (only for evaluating models too big for one card).
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    if quantized and not torch.cuda.is_available():
-        raise RuntimeError("4-bit mode needs a CUDA GPU. Use Colab T4 or omit --quantized.")
+    if (quantized or multi_gpu) and not torch.cuda.is_available():
+        raise RuntimeError("4-bit and multi-GPU modes need a CUDA GPU. Omit --quantized / --multi-gpu.")
+    compute_dtype = resolve_dtype(dtype)
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
-    kwargs = {"revision": revision}
+    kwargs = {"revision": revision, "dtype": compute_dtype}
     if quantized:
-        kwargs.update(device_map={"": torch.cuda.current_device()}, quantization_config=BitsAndBytesConfig(
+        kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.float16))
-    else:
-        kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
+            bnb_4bit_compute_dtype=compute_dtype)
+    if multi_gpu:
+        kwargs["device_map"] = "auto"
+    elif quantized:
+        kwargs["device_map"] = {"": torch.cuda.current_device()}
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
-    if not quantized:
+    if not quantized and not multi_gpu:
         model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.config.pad_token_id = tokenizer.pad_token_id
     return model, tokenizer
+
+
+def model_device(model):
+    """Device of the input embeddings: where input ids must be placed."""
+    return model.get_input_embeddings().weight.device
+
+
+class TimeBudgetCallback(TrainerCallback):
+    """Stop training cleanly after `minutes`; the script then still saves and evaluates."""
+
+    def __init__(self, minutes):
+        self.seconds = None if minutes is None else minutes * 60
+        self.start = None
+        self.stopped_early = False
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.start = time.monotonic()
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.seconds is not None and time.monotonic() - self.start >= self.seconds:
+            control.should_training_stop = True
+            # Evaluate and save the state reached, so it can still be picked as the best checkpoint.
+            control.should_evaluate = args.eval_strategy != "no"
+            control.should_save = args.save_strategy != "no"
+            self.stopped_early = True
+        return control
+
+
+# ---------------------------------------------------------------- legacy detection scoring
 
 
 class AnswerCollator:
@@ -75,7 +141,7 @@ def predict_buggy(model, tokenizer, texts, max_length=512, batch_size=4):
         raise ValueError("batch_size must be positive")
     model.eval()
     collator = AnswerCollator(tokenizer.pad_token_id)
-    device = model.get_input_embeddings().weight.device
+    device = model_device(model)
     probabilities, truncated_count = [], 0
     texts = list(texts)
     for start in range(0, len(texts), batch_size):

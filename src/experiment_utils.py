@@ -1,19 +1,26 @@
-"""Shared input checks and classification reports for neural experiments."""
+"""Shared data loading, run metadata, bootstrap intervals and classification reports."""
 
 import json
+import platform
 import random
+import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support, roc_auc_score
 
 from data_utils import pairs_to_examples
 
+DEFAULT_DATA_DIR = "data/processed/small"
+PACKAGES = ("torch", "transformers", "peft", "accelerate", "bitsandbytes", "sacrebleu", "pandas", "numpy")
+
 
 def seed_everything(seed=42):
+    import torch
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -21,7 +28,11 @@ def seed_everything(seed=42):
         torch.cuda.manual_seed_all(seed)
 
 
-def load_examples(data_dir, split, limit_pairs=None, seed=42):
+# ---------------------------------------------------------------- data
+
+
+def load_pairs(data_dir, split, limit_pairs=None, seed=42):
+    """Read one split of (buggy, fixed) pairs; optionally a seeded random subset of `limit_pairs`."""
     if split not in {"train", "val", "test"}:
         raise ValueError(f"Unknown split: {split}")
     path = Path(data_dir) / f"{split}.parquet"
@@ -36,7 +47,87 @@ def load_examples(data_dir, split, limit_pairs=None, seed=42):
         if limit_pairs < 1:
             raise ValueError("limit_pairs must be positive")
         pairs = pairs.sample(min(limit_pairs, len(pairs)), random_state=seed)
-    return pairs_to_examples(pairs).reset_index(drop=True)
+    return pairs
+
+
+def load_examples(data_dir, split, limit_pairs=None, seed=42):
+    """Detection examples: every pair gives a buggy (1) and a fixed (0) example."""
+    return pairs_to_examples(load_pairs(data_dir, split, limit_pairs, seed)).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- uncertainty
+
+
+def bootstrap_ci(values, n=2000, seed=42):
+    """Mean and 95% percentile interval of the mean, resampling pairs with replacement."""
+    values = np.asarray(values, dtype=float)
+    if not len(values):
+        raise ValueError("values must be nonempty")
+    rng = np.random.default_rng(seed)
+    means = values[rng.integers(0, len(values), size=(n, len(values)))].mean(axis=1)
+    low, high = np.percentile(means, [2.5, 97.5])
+    return {"mean": float(values.mean()), "low": float(low), "high": float(high)}
+
+
+def paired_bootstrap_diff(a, b, n=2000, seed=42):
+    """Interval of mean(a - b) where a[i] and b[i] are two systems' scores on the same pair i."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.shape != b.shape:
+        raise ValueError("paired values must have the same shape")
+    return bootstrap_ci(a - b, n=n, seed=seed)
+
+
+# ---------------------------------------------------------------- run metadata
+
+
+def package_versions():
+    found = {}
+    for package in PACKAGES:
+        try:
+            found[package] = version(package)
+        except PackageNotFoundError:
+            pass
+    return found
+
+
+def git_commit():
+    try:
+        root = Path(__file__).resolve().parents[1]
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                              text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def gpu_names():
+    try:
+        import torch
+    except ImportError:
+        return []
+    if not torch.cuda.is_available():
+        return []
+    return [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+
+
+def run_metadata(args):
+    """Everything needed to say later exactly what produced a metrics.json."""
+    return {
+        "args": {key: value for key, value in vars(args).items()},
+        "git_commit": git_commit(),
+        "packages": package_versions(),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "gpus": gpu_names(),
+    }
+
+
+def write_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+
+
+# ---------------------------------------------------------------- detection reports
 
 
 def classification_metrics(labels, probabilities):
@@ -62,16 +153,9 @@ def classification_metrics(labels, probabilities):
 def save_report(output_dir, examples, probabilities, metadata):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    environment = {}
-    for package in ("torch", "transformers", "peft", "accelerate", "bitsandbytes"):
-        try:
-            environment[package] = version(package)
-        except PackageNotFoundError:
-            pass
-    report = {**metadata, "environment": environment, **classification_metrics(examples.label, probabilities)}
-    (output_dir / "metrics.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    report = {**metadata, "environment": package_versions(),
+              **classification_metrics(examples.label, probabilities)}
+    write_json(output_dir / "metrics.json", report)
     predictions = examples[["pair", "label"]].copy()
     predictions["p_buggy"] = probabilities
     predictions["prediction"] = (np.asarray(probabilities) >= 0.5).astype(int)
