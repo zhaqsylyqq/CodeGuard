@@ -17,7 +17,9 @@ from data_utils import (
     pairs_to_examples,
     rebuild_snippets,
     remove_cross_split_duplicates,
+    sample_nested,
     split_by_project,
+    within_length_limit,
 )
 
 
@@ -125,3 +127,62 @@ def test_pairs_to_examples_gives_balanced_labels():
     assert len(examples) == 4
     assert examples["label"].tolist() == [1, 1, 0, 0]
     assert examples.loc[examples["label"] == 1, "text"].tolist() == ["a = 1", "b = 2"]
+
+
+NESTED_SIZES = {"small": {"train": 4, "val": 2, "test": 2}, "full": {"train": 10, "val": 5, "test": 6}}
+
+
+def _split_table(n_per_split=(30, 10, 12)):
+    rows = []
+    for name, n in zip(["train", "val", "test"], n_per_split):
+        for i in range(n):
+            rows.append({"pair_id": f"{name}{i}", "split": name, "buggy": "a", "fixed": "b"})
+    return pd.DataFrame(rows)
+
+
+def test_sample_nested_small_is_subset_of_full_in_every_split():
+    tiers = sample_nested(_split_table(), NESTED_SIZES, seed=42)
+    for name in ["train", "val", "test"]:
+        small = set(tiers["small"].loc[tiers["small"]["split"] == name, "pair_id"])
+        full = set(tiers["full"].loc[tiers["full"]["split"] == name, "pair_id"])
+        assert small < full
+
+
+def test_sample_nested_sizes_prefixes_and_determinism():
+    df = _split_table()
+    tiers = sample_nested(df, NESTED_SIZES, seed=42)
+    assert list(tiers) == ["small", "full"]
+    for tier, sizes in NESTED_SIZES.items():
+        out = tiers[tier]
+        assert list(out.columns) == list(df.columns)
+        assert list(out.index) == list(range(len(out)))
+        assert out["split"].value_counts().to_dict() == sizes
+        assert out["pair_id"].is_unique
+    for name in ["train", "val", "test"]:
+        small = tiers["small"].loc[tiers["small"]["split"] == name, "pair_id"].tolist()
+        full = tiers["full"].loc[tiers["full"]["split"] == name, "pair_id"].tolist()
+        assert full[: len(small)] == small  # small is a prefix of the same shuffled order
+    again = sample_nested(df, NESTED_SIZES, seed=42)
+    for tier in tiers:
+        pd.testing.assert_frame_equal(tiers[tier], again[tier])
+    other = sample_nested(df, NESTED_SIZES, seed=7)
+    assert not tiers["full"]["pair_id"].equals(other["full"]["pair_id"])
+
+
+def test_sample_nested_too_many_rows_raises():
+    with pytest.raises(ValueError, match="val"):
+        sample_nested(_split_table(), {"full": {"train": 5, "val": 11, "test": 1}}, seed=42)
+
+
+def test_within_length_limit():
+    at_limit_chars = "x" * 2000
+    at_limit_lines = "\n".join(["a"] * 60)
+    one_line_over = "\n".join(["a"] * 61)
+    df = pd.DataFrame({
+        "buggy": ["a = 1", at_limit_chars, at_limit_lines, "x" * 2001, one_line_over, "a"],
+        "fixed": ["a = 2", at_limit_chars, at_limit_lines, "a", "a", "x" * 2001],
+    })
+    assert within_length_limit(df).tolist() == [True, True, True, False, False, False]
+    # custom limits: 3 chars, 2 lines
+    small = pd.DataFrame({"buggy": ["abc", "abcd", "a\nb", "a\nb\nc"], "fixed": ["a"] * 4})
+    assert within_length_limit(small, max_chars=3, max_lines=2).tolist() == [True, False, True, False]

@@ -2,7 +2,7 @@
 
 Pipeline (see notebooks/01_data.ipynb):
     load shards -> rebuild buggy/fixed code from diff -> dedup -> split by project
-    -> remove cross-split duplicates -> sample.
+    -> remove cross-split duplicates -> length filter -> nested samples (small, full).
 """
 
 import gzip
@@ -236,6 +236,51 @@ def sample_pairs(df, sizes, seed=42):
     """Random sample per split, e.g. sizes={"train": 4000, "val": 500, "test": 500}."""
     parts = [df[df["split"] == name].sample(n=n, random_state=seed) for name, n in sizes.items()]
     return pd.concat(parts, ignore_index=True)
+
+
+def sample_nested(df, sizes_by_tier, seed=42):
+    """Nested samples per split, e.g.
+    sizes_by_tier={"small": {"train": 4000, ...}, "full": {"train": 50000, ...}}.
+
+    Each split is shuffled ONCE with the seed and every tier takes a prefix of
+    that order. So the smaller tier is a strict subset of the bigger one within
+    every split: results on "small" are directly comparable to "full" (same
+    pairs, just fewer), and nothing in "small" is unseen by "full".
+    Returns {tier_name: DataFrame} with a fresh index and the original columns.
+    """
+    shuffled = {}
+    for sizes in sizes_by_tier.values():
+        for name, n in sizes.items():
+            if name not in shuffled:
+                part = df[df["split"] == name]
+                shuffled[name] = part.sample(frac=1, random_state=seed)
+            if n > len(shuffled[name]):
+                raise ValueError(f"split {name!r} has {len(shuffled[name])} rows, {n} requested")
+    return {
+        tier: pd.concat([shuffled[name].iloc[:n] for name, n in sizes.items()], ignore_index=True)
+        for tier, sizes in sizes_by_tier.items()
+    }
+
+
+# ------------------------------------------------------------ length filter
+
+MAX_SNIPPET_CHARS = 2000
+MAX_SNIPPET_LINES = 60
+
+
+def _within(code, max_chars, max_lines):
+    return len(code) <= max_chars and code.count("\n") + 1 <= max_lines
+
+
+def within_length_limit(df, max_chars=MAX_SNIPPET_CHARS, max_lines=MAX_SNIPPET_LINES):
+    """Boolean Series: True when BOTH buggy and fixed are within both limits.
+
+    Counted in characters and lines, not model tokens, so the filter does not
+    depend on which tokenizer is used later. Removes rare very long outliers.
+    """
+    buggy_ok = df["buggy"].map(lambda code: _within(code, max_chars, max_lines))
+    fixed_ok = df["fixed"].map(lambda code: _within(code, max_chars, max_lines))
+    return (buggy_ok & fixed_ok).astype(bool)
 
 
 # ------------------------------------------------------------ classification
