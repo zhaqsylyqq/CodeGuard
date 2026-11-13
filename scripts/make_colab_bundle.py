@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_NAME = "codeguard_colab_bundle.zip"
 TIERS = ("small", "full")
 SPLIT_FILES = ("train.parquet", "val.parquet", "test.parquet")
-FORBIDDEN_PREFIXES = ("data/raw/", ".venv/", "runs/", "runs_smoke/", "logs/", "logs_smoke/", "dist/", ".git/")
+FORBIDDEN_PREFIXES = ("data/raw/", ".venv/", "runs/", "runs_smoke/", "logs/", "logs_smoke/", "dist/", ".git/",
+                      "out/")  # out/ = Colab output downloaded from Drive
 FORBIDDEN_SUFFIXES = (".safetensors", ".bin", ".pt", ".gguf", ".zip")
 
 

@@ -13,6 +13,7 @@ runs_smoke/
 logs/
 logs_smoke/
 results_smoke/
+out/
 *.zip
 
 # tooling caches

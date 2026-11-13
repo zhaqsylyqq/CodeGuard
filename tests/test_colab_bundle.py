@@ -9,9 +9,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import make_colab_bundle as mb
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
 
+def in_git_checkout():
+    """The Colab copy is unpacked from the bundle and has no .git; the script runs from a checkout."""
+    return shutil.which("git") is not None and (mb.ROOT / ".git").exists()
+
+
+
+
+@pytest.mark.skipif(not in_git_checkout(), reason="needs git and a git checkout")
 def test_code_bundle_has_the_code_and_nothing_forbidden(tmp_path):
     output = tmp_path / "bundle.zip"
     paths = mb.build(output, with_data=False)
@@ -24,7 +31,8 @@ def test_code_bundle_has_the_code_and_nothing_forbidden(tmp_path):
 
 
 def test_forbidden_paths_are_refused():
-    for bad in ("runs/x/metrics.json", "data/raw/a.jsonl.gz", "w/model.safetensors", "r/checkpoints/c/x.json"):
+    for bad in ("runs/x/metrics.json", "data/raw/a.jsonl.gz", "w/model.safetensors", "r/checkpoints/c/x.json",
+                "out/results/results.csv"):
         with pytest.raises(ValueError):
             mb.check_allowed([bad])
 

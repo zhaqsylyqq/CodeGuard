@@ -141,7 +141,10 @@ def test_tiny_llama_lora_training_and_reload(tmp_path):
     output = tmp_path / "lora"
     args = parser().parse_args(["--model", str(base), "--data-dir", str(tmp_path),
                                "--output", str(output), "--epochs", "1", "--batch-size", "2",
-                               "--accumulation-steps", "1", "--max-length", "64"])
+                               "--accumulation-steps", "1", "--max-length", "64",
+                               # fp32: on a GPU without native bf16 (T4) "auto" means fp16, and the fp16
+                               # grad scaler skips the first optimizer step, so one step leaves lora_B at 0
+                               "--dtype", "fp32"])
     report = run(args)
     assert report["n_examples"] == 2
     assert report["task"] == "detection" and report["stopped_by_time_budget"] is False
