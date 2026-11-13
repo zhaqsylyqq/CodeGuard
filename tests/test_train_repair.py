@@ -71,6 +71,25 @@ def test_train_writes_metrics_predictions_and_adapter(workspace):
     assert any(t.abs().sum() > 0 for name, t in weights.items() if "lora_B" in name)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
+def test_fp16_training_on_gpu_updates_lora(workspace):
+    # The Colab T4 has no native bf16, so it trains in fp16: LoRA weights must still move. The fp16
+    # gradient scaler skips the first steps while it lowers its scale, so train for 12 steps.
+    from safetensors.torch import load_file
+
+    from train_repair import parser, run
+
+    output = workspace / "runs" / "lora_fp16"
+    args = parser().parse_args([
+        "--model", str(workspace / "tiny"), "--data-dir", str(workspace / "data"), "--output", str(output),
+        "--epochs", "3", "--batch-size", "2", "--accumulation-steps", "1", "--max-length", "400",
+        "--dtype", "fp16", "--splits", "val", "--no-direction", "--limit-pairs", "8"])
+    report = run(args)
+    assert report["global_step"] == 12
+    weights = load_file(output / "adapter" / "adapter_model.safetensors")
+    assert any(t.abs().sum() > 0 for name, t in weights.items() if "lora_B" in name)
+
+
 def test_second_run_is_a_no_op(workspace, monkeypatch):
     import train_repair
 

@@ -43,12 +43,13 @@ def encode_candidate(tokenizer, code, answer, max_length=512):
 
 
 def resolve_dtype(dtype="auto"):
-    """'auto' means bf16 on a CUDA GPU that supports it, fp16 on older GPUs, fp32 on CPU."""
+    """'auto' means bf16 on a CUDA GPU with native bf16 (Ampere or newer), fp16 on older GPUs such as
+    the Colab T4, fp32 on CPU. Emulated bf16 is not counted: it is slow and Trainer may reject it."""
     if dtype != "auto":
         return {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[dtype]
     if not torch.cuda.is_available():
         return torch.float32
-    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    return torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
 
 
 def require_single_gpu():
