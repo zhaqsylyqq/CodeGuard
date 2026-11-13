@@ -129,6 +129,18 @@ def test_resumed_run_keeps_its_spent_time_budget(workspace):
     assert report["stopped_by_time_budget"] and report["train_seconds_all_attempts"] >= 600
 
 
+def test_budget_starts_over_when_there_is_no_checkpoint(workspace):
+    from train_repair import run
+
+    output = workspace / "runs" / "lora_lost_checkpoints"
+    output.mkdir(parents=True)
+    # A budget file from a lost session (no checkpoints next to it) must not shorten the new attempt.
+    (output / "train_time.json").write_text(json.dumps({"elapsed_seconds": 600, "step": 3}), encoding="utf-8")
+    report = run(_train_args(workspace, output, "--splits", "val", "--no-direction", "--time-budget-min", "5"))
+    assert report["resumed_from"] is None and report["global_step"] == 4
+    assert not report["stopped_by_time_budget"] and report["train_seconds_all_attempts"] < 300
+
+
 def test_eval_only_after_adapter_exists(workspace, monkeypatch):
     import train_repair
 

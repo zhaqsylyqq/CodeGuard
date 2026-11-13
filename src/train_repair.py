@@ -102,6 +102,10 @@ def train(args, output):
     resume = last_checkpoint(output / "checkpoints")
     if resume:
         print(f"resuming from {resume}", flush=True)
+    else:
+        # No checkpoint (first attempt, or the checkpoints were lost with a Colab session): training
+        # starts over, so its time budget starts over too.
+        (output / "train_time.json").unlink(missing_ok=True)
     start = time.monotonic()
     result = trainer.train(resume_from_checkpoint=resume)
     train_seconds = time.monotonic() - start

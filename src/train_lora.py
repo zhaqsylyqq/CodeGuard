@@ -48,7 +48,7 @@ def run(args):
         dataloader_pin_memory=on_gpu,
         remove_unused_columns=False, label_names=["labels"],
     )
-    budget = TimeBudgetCallback(args.time_budget_min, output / "train_time.json")
+    budget = TimeBudgetCallback(args.time_budget_min)  # this script never resumes: fresh budget
     trainer = Trainer(model=model, args=settings,
                       train_dataset=training_items(train, tokenizer, args.max_length),
                       eval_dataset=training_items(val, tokenizer, args.max_length),
