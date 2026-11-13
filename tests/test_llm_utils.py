@@ -70,3 +70,39 @@ def test_time_budget_counts_time_from_earlier_attempts(tmp_path):
     fresh = TimeBudgetCallback(2)
     fresh.on_train_begin(None, None, None)
     assert not _budget_step(fresh).should_training_stop
+
+
+# ---------------------------------------------------------------- parameter counting
+
+
+def test_quantized_weights_are_counted_by_their_original_shape():
+    from types import SimpleNamespace
+
+    from eval_repair import count_parameters
+
+    model = torch.nn.Linear(8, 4, bias=False)  # 32 weights
+    packed = torch.nn.Parameter(torch.zeros(16, 1, dtype=torch.uint8), requires_grad=False)
+    packed.quant_state = SimpleNamespace(shape=torch.Size([4, 8]))  # how bitsandbytes stores 4-bit
+    model.weight = packed
+    model.register_parameter("lora", torch.nn.Parameter(torch.zeros(3)))
+    assert count_parameters(model) == {"total_parameters": 35, "trainable_parameters": 3}
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bitsandbytes 4-bit needs a CUDA GPU")
+def test_qlora_total_matches_unquantized_model(tmp_path):
+    pytest.importorskip("bitsandbytes")
+    from eval_repair import count_parameters
+    from llm_utils import load_model
+    from tiny_models import make_model, make_tokenizer
+
+    tokenizer = make_tokenizer()
+    config = make_model(tokenizer).config
+    config.hidden_size, config.intermediate_size = 64, 128  # 4-bit needs dims divisible by the block size
+    from transformers import LlamaForCausalLM
+    LlamaForCausalLM(config).save_pretrained(tmp_path)
+    tokenizer.save_pretrained(tmp_path)
+    full, _ = load_model(str(tmp_path), dtype="fp16")
+    quantized, _ = load_model(str(tmp_path), quantized=True, dtype="fp16")
+    naive = sum(p.numel() for p in quantized.parameters())
+    assert naive < count_parameters(full)["total_parameters"]  # the bug this guards against
+    assert count_parameters(quantized)["total_parameters"] == count_parameters(full)["total_parameters"]

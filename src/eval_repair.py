@@ -6,6 +6,7 @@ see section 6.5 of docs/AGENT_GUIDE.md and src/make_report.py.
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -44,9 +45,20 @@ def evaluate_run(model, tokenizer, data_dir, splits, output, shots=(), batch_siz
     return results
 
 
+def parameter_count(parameter):
+    """Number of weights a parameter stands for. bitsandbytes packs 4-bit weights two per byte, so
+    numel() of a quantized weight is half the real count; its original shape is in quant_state."""
+    quant_state = getattr(parameter, "quant_state", None)
+    if quant_state is not None and getattr(quant_state, "shape", None) is not None:
+        return math.prod(quant_state.shape)
+    return parameter.numel()
+
+
 def count_parameters(model):
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    """Total and trainable parameters, counting 4-bit weights by their unquantized size (QLoRA and
+    LoRA shares are then comparable)."""
+    total = sum(parameter_count(p) for p in model.parameters())
+    trainable = sum(parameter_count(p) for p in model.parameters() if p.requires_grad)
     return {"total_parameters": int(total), "trainable_parameters": int(trainable)}
 
 
