@@ -80,6 +80,13 @@ Add `--limit-pairs 16` for a quick smoke run (write it to a separate output dire
 where it stopped. Data defaults to `data/processed/small`; pass `--data-dir data/processed/full` for the full
 tier. The server plan (6.7B, rank ablation, QLoRA, 33B) is run by `scripts/run_server.sh`; see the runbook.
 
+GPU runs on Google Colab (free T4): `python scripts/make_colab_bundle.py` writes
+`dist/codeguard_colab_bundle.zip` (code + both data tiers, no raw data, weights or runs). Upload it to
+`MyDrive/CodeGuard/`, open `notebooks/colab_runs.ipynb` in Colab with a T4 runtime and use Run all: tests,
+preflight with timing, the `SMOKE=1` server rehearsal, the two small-tier insurance runs and, if time
+remains, `zs_6.7b_small_4bit`. Outputs are copied to `MyDrive/CodeGuard/out/` after every stage and finished
+stages are skipped on a re-run.
+
 Demo: `python app/server.py`, then open http://127.0.0.1:8000 (uses the small-tier adapter if it exists).
 
 ## Data

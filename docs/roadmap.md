@@ -8,7 +8,7 @@ runs only.
 |---|---|---|
 | WP1 Data tiers | `data_utils.sample_nested`, length filter, `01_data.ipynb` | Run: small 4000/500/500, full 50000/2000/5000, zero leakage |
 | WP2 Repair core | `repair_utils.py`, `experiment_utils.py` | Code-checked (unit tests; real DeepSeek tokenizer for masking) |
-| WP3 Train / eval scripts | `train_repair.py`, `eval_repair.py` | Code-checked; smoke on real 1.3B on a 4 GB GPU; insurance runs in progress |
+| WP3 Train / eval scripts | `train_repair.py`, `eval_repair.py` | Code-checked; smoke on real 1.3B on a 4 GB GPU; insurance runs moved to Colab |
 | WP4 Detection track | `bilstm.py`, `llm_baseline.py`, `train_lora.py`, notebooks 02–05 | TF-IDF and BiLSTM run on small tier (chance level); LLM detection not run |
 | WP5 Server tooling | `scripts/`, `docs/SERVER_RUNBOOK.md` | Code-checked (plans for 6/2/1 GPUs, preflight without model checks); `SMOKE=1` rehearsal on a Linux GPU machine not done |
 | WP6 Reporting | `make_report.py`, `06_results.ipynb` | Code-checked on fake fixtures only |
@@ -19,7 +19,8 @@ runs only.
 
 | Run | Status |
 |---|---|
-| `zs_1.3b_small`, `lora_1.3b_r16_small` (insurance, small tier, local GPU) | In progress |
+| `zs_1.3b_small`, `lora_1.3b_r16_small` (insurance, small tier) | Local RTX 3050 (4 GB): LoRA training finished, both runs then hit CUDA OOM during generation; no metrics.json. Moved to Colab (`notebooks/colab_runs.ipynb`) |
+| `zs_6.7b_small_4bit` (6.7B zero-shot, 4-bit, small tier; Colab, if time remains) | Prepared |
 | R1–R8 (must) | Waiting for the server window |
 | R9–R10 (should) | Waiting for the server window |
 | R11 `zs_33b`, R12 seeds 43/44 (optional) | Only if time remains |
@@ -29,7 +30,7 @@ runs only.
 1. Ask the instructor the questions at the top of `docs/SERVER_RUNBOOK.md`.
 2. Finish both insurance runs and run `make_report.py` on them.
 3. Download the 6.7B weights (`scripts/download_models.py`) and copy the HF cache if the server has no internet.
-4. Rehearse `SMOKE=1 GPUS="0" bash scripts/run_server.sh` on a Linux machine with a GPU.
+4. Rehearse `SMOKE=1 GPUS="0" bash scripts/run_server.sh` on a Linux machine with a GPU (stage 6 of `notebooks/colab_runs.ipynb`).
 5. Run `scripts/preflight.py` with the timing run to choose `BATCH` / `ACCUM`.
 
 ## After the window
