@@ -11,6 +11,8 @@ data/processed/
 runs/
 runs_smoke/
 logs/
+logs_smoke/
+results_smoke/
 *.zip
 
 # tooling caches
