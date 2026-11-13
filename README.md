@@ -1,53 +1,88 @@
 # CodeGuard
 
-Detecting bugs in Python code: given a code snippet, decide whether it is **buggy** or **fixed**.
-Data: CTSSB-1M, about 1M single-statement bug fixes mined from GitHub
+LoRA / QLoRA fine-tuning of a code LLM (DeepSeek-Coder-instruct) to **repair single-statement Python bugs**:
+given a buggy code fragment, generate the fixed fragment. Detection baselines ("is this snippet buggy?") are
+kept as a secondary track. Data: CTSSB-1M, about 1M single-statement bug fixes mined from GitHub
 ([TSSB-3M](https://github.com/cedricrupb/TSSB3M), cleaned version).
 
 Course project: Introduction to NLP (CSCI1407), KBTU, Fall 2026.
 Authors: Zhaxylyk Abdimutalipov, Alrami Dandibay.
 
-## Project layout
+Design, experiment matrix and acceptance criteria: [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md).
+Team guide in Russian: [docs/PROJECT_GUIDE_RU.md](docs/PROJECT_GUIDE_RU.md).
+Server window: [docs/SERVER_RUNBOOK.md](docs/SERVER_RUNBOOK.md).
+
+## Why repair and not detection
+
+Snippets are diff hunks of about 7 lines and the buggy and fixed versions differ by one statement. Shown one
+snippet without the rest of the file, "buggy or fixed?" is mostly not answerable: both trained detection
+baselines sit at chance (table below). Repair is well-posed on the same data and is checked against the real
+developer fix.
+
+## Layout
 
 ```
-data/raw/            original CTSSB-1M shards (not in git)
-data/processed/      pool.parquet, train/val/test.parquet (not in git)
+data/raw/                 CTSSB-1M shards (not in git)
+data/processed/small/     train/val/test.parquet, 4000/500/500 pairs (not in git)
+data/processed/full/      train/val/test.parquet, 50000/2000/5000 pairs; small is a subset (not in git)
 notebooks/
-  01_data.ipynb      data preparation + EDA plots
-  02_baseline.ipynb  TF-IDF + logistic regression baseline
-src/data_utils.py    reusable data functions
-src/bilstm.py        sequence baseline training
-src/llm_baseline.py  DeepSeek answer likelihood evaluation
-src/train_lora.py    LoRA / QLoRA training
-tests/               unit tests for data_utils
-results/             summary.json and figures
+  01_data.ipynb           data preparation, both tiers, EDA plots
+  02_baseline.ipynb       TF-IDF + logistic regression (detection)
+  03-05                   BiLSTM, LLM zero-shot and LoRA detection (legacy track)
+  06_results.ipynb        figures, error analysis, cost table from runs/ and results/
+src/
+  data_utils.py           loading, diff -> code, dedup, project split, nested sampling, length filter
+  experiment_utils.py     load_pairs, bootstrap intervals, run metadata
+  llm_utils.py            model loading (bf16 / 4-bit / multi-GPU), detection prompt and scoring
+  repair_utils.py         repair prompt, label masking, generation, parsing, repair metrics
+  train_repair.py         LoRA / QLoRA training for repair, then evaluation on val and test
+  eval_repair.py          zero-shot / 3-shot / adapter evaluation
+  make_report.py          runs/ -> results/*.csv, selection.json (chosen on val only)
+  bilstm.py, llm_baseline.py, train_lora.py   detection track
+scripts/
+  download_models.py      pre-fetch weights; print pinned revisions
+  preflight.py            environment / GPU / data / model checks and a timing run
+  run_server.sh           the whole server window in one command (one queue per GPU)
+app/                      FastAPI demo (server.py + index.html)
+tests/                    unit and smoke tests on tiny models and synthetic fixtures
+results/                  summary.json, baseline metrics, figures; report tables after real runs
+runs/                     one directory per run: metrics.json, predictions, adapter (not in git)
 ```
 
-## How to run
+## How to run (small tier, Windows PowerShell)
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
+python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu126   # CUDA build
+python -m pip install -r requirements-neural.txt
 
-# put ctssb_data_1M.zip content into data/raw/ctssb/ctssb_data_1M/ (file-0.jsonl.gz ... file-9.jsonl.gz)
-python -m pytest tests          # unit tests
-jupyter lab                     # then run notebooks/01_data.ipynb top to bottom
+# raw data: data/raw/ctssb/ctssb_data_1M/file-0.jsonl.gz ... file-9.jsonl.gz
+python -m pytest tests -q
+jupyter nbconvert --to notebook --execute --inplace notebooks/01_data.ipynb   # builds both tiers
+jupyter nbconvert --to notebook --execute --inplace notebooks/02_baseline.ipynb
+python src/bilstm.py --output runs/bilstm_small
 ```
 
-The first run reads all shards (about 2 minutes) and caches the result in `data/processed/pool.parquet`.
+Repair runs on the small tier with the 1.3B model (one GPU; set `CUDA_VISIBLE_DEVICES` if you have several):
 
-## What the data pipeline does
+```powershell
+$M = "deepseek-ai/deepseek-coder-1.3b-instruct"; $REV = "e063262dac8366fc1f28a4da0ff3c50ea66259ca"
+python src/eval_repair.py  --model $M --revision $REV --output runs/zs_1.3b_small --shots 0
+python src/train_repair.py --model $M --revision $REV --output runs/lora_1.3b_r16_small --rank 16 `
+    --batch-size 2 --accumulation-steps 16
+python src/make_report.py --runs runs --results results
+```
 
-1. Load all shards, keep rows with `in_function == True`.
-2. Rebuild `buggy` and `fixed` code from the diff; keep diffs with a single hunk.
-3. Drop pairs where buggy equals fixed after normalization (indentation is preserved), then exact duplicates.
-4. Flag Python 2 code (not removed).
-5. Split 80/10/10 by `project`, so no project appears in two splits.
-6. Remove val/test pairs whose code also appears in an earlier split.
-7. Sample 4000 / 500 / 500 pairs (seed 42) and save `train/val/test.parquet`.
+Add `--limit-pairs 16` for a quick smoke run (write it to a separate output directory). Every script writes
+`metrics.json` last and skips the run if it already exists, so re-running a command after a crash continues
+where it stopped. Data defaults to `data/processed/small`; pass `--data-dir data/processed/full` for the full
+tier. The server plan (6.7B, rank ablation, QLoRA, 33B) is run by `scripts/run_server.sh`; see the runbook.
 
-## Key numbers
+Demo: `python app/server.py`, then open http://127.0.0.1:8000 (uses the small-tier adapter if it exists).
+
+## Data
 
 | Step | Pairs |
 |---|---|
@@ -57,41 +92,43 @@ The first run reads all shards (about 2 minutes) and caches the result in `data/
 | Real change (buggy != fixed) | 713,790 |
 | After deduplication | 647,850 |
 | After removing cross-split duplicates | 647,683 |
-| Sample (train / val / test) | 4000 / 500 / 500 |
+| After length filter (<= 2000 chars and <= 60 lines) | 647,571 |
+| Small tier (train / val / test) | 4000 / 500 / 500 |
+| Full tier (train / val / test) | 50,000 / 2000 / 5000 |
 
-Python 2 share: 4.9% of the pool, 5.1% of the sample. No project or snippet is shared between splits.
-Full numbers: `results/summary.json`.
+Splits are by project (80/10/10); no project or snippet is shared between splits in the pool or in either
+tier, and small is a strict subset of full within every split. Python 2 share: 4.9% of the pool.
+Source: `results/summary.json`.
 
-## Neural experiments (stages 3–5)
+## Results
 
-Implementation is available in notebooks `03_bilstm.ipynb`,
-`04_deepseek_baseline.ipynb`, and `05_lora.ipynb`. Full CTSSB neural results
-have not been measured in this checkout; processed data is not included.
+Only numbers produced by a run with a `metrics.json` are listed. Validation split, small tier.
 
-```powershell
-python -m pip install -r requirements-neural.txt
-python -m pytest tests -q
-python src/bilstm.py --output runs/bilstm
-python src/llm_baseline.py --quantized --output runs/deepseek_zero_shot
-python src/train_lora.py --quantized --rank 8 --output runs/qlora_r8
-python src/train_lora.py --quantized --rank 16 --output runs/qlora_r16
-python src/train_lora.py --quantized --rank 32 --output runs/qlora_r32
-```
+**Detection (isolated snippet: buggy or fixed?)**
 
-4-bit mode requires CUDA and bitsandbytes. Omit `--quantized` for ordinary LoRA.
-Use `--limit-pairs 8 --batch-size 1` for an initial smoke run, with `--epochs 1`
-for training. Outputs go to `runs/` (ignored by git). These commands use validation;
-test is reserved for the final evaluation. See the Russian guide, sections 13–18,
-for Colab setup, output formats, scoring details and limitations.
+| Model | Accuracy | F1 | ROC-AUC | Source |
+|---|---|---|---|---|
+| TF-IDF + logistic regression | 0.523 | 0.436 | – | `results/baseline_metrics.json` |
+| BiLSTM | 0.499 | 0.209 | 0.4998 | `results/bilstm_metrics.json` |
 
-## Baseline (TF-IDF + Logistic Regression, validation set)
+Both are at chance level (classes are 50/50; with 1000 examples chance spans roughly 0.47–0.53).
 
-| Metric | Value |
-|---|---|
-| Accuracy | 0.503 |
-| Precision | 0.506 |
-| Recall | 0.274 |
-| F1 | 0.355 |
+**Repair**: no completed runs yet. The table is filled from `results/results.csv` after real runs
+(`python src/make_report.py`). Test numbers are reported only for the configuration selected on validation
+(see `results/selection.json`).
 
-The baseline is at chance level (classes are 50/50): buggy and fixed snippets share almost all tokens,
-so a bag-of-tokens model cannot tell them apart. Details: `notebooks/02_baseline.ipynb`, `results/baseline_metrics.json`.
+## Evaluation protocol in one paragraph
+
+Every run writes predictions for val and test. All comparisons (rank, quantization, model size) are made on
+val; `make_report.py` picks the final configuration by val exact match and writes that choice to
+`results/selection.json` before it reads any test number. The headline table shows test numbers for zero-shot,
+3-shot and the selected LoRA model, with 95% bootstrap intervals and paired bootstrap differences.
+Metrics: exact match after whitespace normalization (headline), localization (did the model edit the line the
+developer edited), copy rate, BLEU next to the copy baseline, and fix-direction accuracy
+(`log P(fixed | buggy) > log P(buggy | fixed)`, chance 0.5).
+
+## Limitations
+
+Single-statement bugs only; fragments without file context; exact match undercounts alternative correct fixes;
+4.9% Python 2 code; deduplication is exact-match only; one seed unless the optional seed runs are done;
+the 33B reference model is evaluated in 4-bit.
