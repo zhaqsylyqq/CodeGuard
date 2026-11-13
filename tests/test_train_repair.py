@@ -113,6 +113,22 @@ def test_resume_from_checkpoint(workspace):
     assert report["global_step"] == 8
 
 
+def test_resumed_run_keeps_its_spent_time_budget(workspace):
+    from train_repair import run
+
+    output = workspace / "runs" / "lora_resume_budget"
+    run(_train_args(workspace, output, "--splits", "val", "--no-direction"))
+    assert json.loads((output / "train_time.json").read_text(encoding="utf-8"))["step"] == 4
+    for name in ("metrics.json", "train_info.json", "val_predictions.parquet"):
+        (output / name).unlink()
+    # Pretend the first attempt used 10 minutes of a 5-minute budget: the resumed run stops after one step.
+    (output / "train_time.json").write_text(json.dumps({"elapsed_seconds": 600, "step": 4}), encoding="utf-8")
+    report = run(_train_args(workspace, output, "--splits", "val", "--no-direction", "--epochs", "2",
+                             "--time-budget-min", "5"))
+    assert report["resumed_from"] is not None and report["global_step"] == 5
+    assert report["stopped_by_time_budget"] and report["train_seconds_all_attempts"] >= 600
+
+
 def test_eval_only_after_adapter_exists(workspace, monkeypatch):
     import train_repair
 

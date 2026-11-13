@@ -4,7 +4,10 @@ The classification prompt and answer likelihood (`predict_buggy`) are used befor
 so zero-shot and fine-tuned detection stay comparable. Do not change their behaviour.
 """
 
+import json
+import os
 import time
+from pathlib import Path
 
 import torch
 from torch.nn import functional as F
@@ -99,18 +102,36 @@ def model_device(model):
 
 
 class TimeBudgetCallback(TrainerCallback):
-    """Stop training cleanly after `minutes`; the script then still saves and evaluates."""
+    """Stop training cleanly after `minutes` of training in total; the script then still saves and evaluates.
 
-    def __init__(self, minutes):
+    With `state_file`, the elapsed training time is written after every step and added back when a
+    crashed run is resumed, so a restart does not get a fresh budget.
+    """
+
+    def __init__(self, minutes, state_file=None):
         self.seconds = None if minutes is None else minutes * 60
+        self.state_file = None if state_file is None else Path(state_file)
+        self.previous = 0.0  # seconds spent in earlier, interrupted attempts
         self.start = None
         self.stopped_early = False
 
+    def elapsed(self):
+        """Training seconds so far, including earlier attempts."""
+        return self.previous + (0.0 if self.start is None else time.monotonic() - self.start)
+
     def on_train_begin(self, args, state, control, **kwargs):
+        if self.state_file is not None and self.state_file.exists():
+            self.previous = float(json.loads(self.state_file.read_text(encoding="utf-8"))["elapsed_seconds"])
         self.start = time.monotonic()
 
     def on_step_end(self, args, state, control, **kwargs):
-        if self.seconds is not None and time.monotonic() - self.start >= self.seconds:
+        elapsed = self.elapsed()
+        if self.state_file is not None:
+            temporary = self.state_file.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"elapsed_seconds": elapsed, "step": state.global_step}),
+                                 encoding="utf-8")
+            os.replace(temporary, self.state_file)  # atomic: a crash never leaves half a file
+        if self.seconds is not None and elapsed >= self.seconds:
             control.should_training_stop = True
             # Evaluate and save the state reached, so it can still be picked as the best checkpoint.
             control.should_evaluate = args.eval_strategy != "no"

@@ -95,7 +95,7 @@ def train(args, output):
         logging_steps=10, report_to="none", seed=args.seed, data_seed=args.seed,
         dataloader_pin_memory=on_gpu, remove_unused_columns=False, label_names=["labels"],
     )
-    budget = TimeBudgetCallback(args.time_budget_min)
+    budget = TimeBudgetCallback(args.time_budget_min, output / "train_time.json")
     trainer = Trainer(model=model, args=settings, train_dataset=train_items, eval_dataset=eval_items,
                       data_collator=AnswerCollator(tokenizer.pad_token_id), processing_class=tokenizer,
                       callbacks=[budget])
@@ -116,7 +116,8 @@ def train(args, output):
         "global_step": trainer.state.global_step, "epochs_done": trainer.state.epoch,
         "stopped_by_time_budget": budget.stopped_early, "resumed_from": resume,
         "best_checkpoint": trainer.state.best_model_checkpoint, "best_eval_loss": trainer.state.best_metric,
-        "train_seconds": train_seconds, "train_samples_per_second": result.metrics.get("train_samples_per_second"),
+        "train_seconds": train_seconds, "train_seconds_all_attempts": budget.elapsed(),
+        "train_samples_per_second": result.metrics.get("train_samples_per_second"),
         "log_history": trainer.state.log_history, **count_parameters(model),
         "adapter_bytes": sum(f.stat().st_size for f in adapter.iterdir() if f.is_file()),
     }
