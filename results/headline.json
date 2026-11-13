@@ -1,0 +1,103 @@
+{
+  "selected_run": "lora_1.3b_r16_small",
+  "tier": "small",
+  "split": "test",
+  "difference": "selected minus other, paired bootstrap over shared pair_ids (2000 resamples, seed 42)",
+  "rows": [
+    {
+      "role": "selected",
+      "run": "lora_1.3b_r16_small",
+      "tier": "small",
+      "model": "deepseek-ai/deepseek-coder-1.3b-instruct",
+      "method": "lora",
+      "rank": 16,
+      "quantized": false,
+      "n": 500,
+      "exact_match": {
+        "mean": 0.132,
+        "low": 0.104,
+        "high": 0.164
+      },
+      "localized": {
+        "mean": 0.456,
+        "low": 0.412,
+        "high": 0.5
+      },
+      "localized_exact": {
+        "mean": 0.436,
+        "low": 0.39195,
+        "high": 0.48
+      },
+      "direction_correct": {
+        "mean": 0.558,
+        "low": 0.514,
+        "high": 0.6
+      }
+    },
+    {
+      "role": "zero-shot",
+      "run": "zs_1.3b_small",
+      "tier": "small",
+      "model": "deepseek-ai/deepseek-coder-1.3b-instruct",
+      "method": "zero-shot",
+      "rank": null,
+      "quantized": false,
+      "n": 500,
+      "exact_match": {
+        "mean": 0.034,
+        "low": 0.018,
+        "high": 0.05
+      },
+      "localized": {
+        "mean": 0.58,
+        "low": 0.538,
+        "high": 0.624
+      },
+      "localized_exact": {
+        "mean": 0.062,
+        "low": 0.04195000000000001,
+        "high": 0.084
+      },
+      "direction_correct": {
+        "mean": 0.564,
+        "low": 0.52,
+        "high": 0.608
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "label": "selected vs zero-shot",
+      "a": "lora_1.3b_r16_small",
+      "b": "zs_1.3b_small",
+      "split": "test",
+      "n_a": 500,
+      "n_b": 500,
+      "n": 500,
+      "exact_match": {
+        "mean": 0.098,
+        "low": 0.072,
+        "high": 0.126,
+        "n": 500
+      },
+      "localized": {
+        "mean": -0.124,
+        "low": -0.184,
+        "high": -0.06395000000000027,
+        "n": 500
+      },
+      "localized_exact": {
+        "mean": 0.374,
+        "low": 0.326,
+        "high": 0.418,
+        "n": 500
+      },
+      "direction_correct": {
+        "mean": -0.006,
+        "low": -0.034,
+        "high": 0.02,
+        "n": 500
+      }
+    }
+  ]
+}

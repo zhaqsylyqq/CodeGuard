@@ -120,9 +120,49 @@ Only numbers produced by a run with a `metrics.json` are listed. Validation spli
 
 Both are at chance level (classes are 50/50; with 1000 examples chance spans roughly 0.47–0.53).
 
-**Repair**: no completed runs yet. The table is filled from `results/results.csv` after real runs
-(`python src/make_report.py`). Test numbers are reported only for the configuration selected on validation
-(see `results/selection.json`).
+**Repair, small tier (Colab T4, 2026-11-13).** Source: `results/results.csv`, `results/headline.json`.
+Selected on val by exact match before test was read: `lora_1.3b_r16_small` (`results/selection.json`).
+95% bootstrap intervals over 500 pairs in brackets. No 3-shot run on the small tier.
+
+Test, headline runs (DeepSeek-Coder-1.3B-instruct):
+
+| Run | Exact match | Localized exact | Localized | Fix direction | Parse ok | Changed | BLEU (copy 93.2) |
+|---|---|---|---|---|---|---|---|
+| `zs_1.3b_small` (zero-shot) | 0.034 [0.018, 0.050] | 0.062 [0.042, 0.084] | 0.580 [0.538, 0.624] | 0.564 [0.520, 0.608] | 0.554 | 0.888 | 78.6 |
+| `lora_1.3b_r16_small` (LoRA r16) | 0.132 [0.104, 0.164] | 0.436 [0.392, 0.480] | 0.456 [0.412, 0.500] | 0.558 [0.514, 0.600] | 0.990 | 0.966 | 89.8 |
+| LoRA minus zero-shot (paired) | +0.098 [0.072, 0.126] | +0.374 [0.326, 0.418] | −0.124 [−0.184, −0.064] | −0.006 [−0.034, 0.020] | | | |
+
+Val, all repair runs:
+
+| Run | Exact match | Localized exact | Localized | Fix direction | Parse ok |
+|---|---|---|---|---|---|
+| `zs_1.3b_small` | 0.018 [0.008, 0.030] | 0.042 [0.026, 0.060] | 0.598 [0.556, 0.640] | 0.500 [0.456, 0.546] | 0.468 |
+| `zs_6.7b_small_4bit` (6.7B zero-shot, 4-bit) | 0.016 [0.006, 0.028] | 0.056 [0.038, 0.078] | 0.750 [0.712, 0.786] | 0.530 [0.488, 0.574] | 0.444 |
+| `lora_1.3b_r16_small` | 0.118 [0.090, 0.148] | 0.450 [0.406, 0.496] | 0.478 [0.434, 0.522] | 0.492 [0.446, 0.534] | 0.990 |
+
+Test numbers of `zs_6.7b_small_4bit` (not used for selection): exact match 0.032 [0.018, 0.048],
+localized exact 0.068 [0.048, 0.090], fix direction 0.580 [0.538, 0.622].
+
+What this shows, and what it does not:
+
+- LoRA on 4000 pairs raises exact match from 3.4% to 13.2% on test and makes the model edit exactly the
+  lines the developer edited 44% of the time instead of 6%. Most bugs (87%) are still not fixed exactly.
+- Fix direction does not change with LoRA and stays close to chance (0.5): val 0.49–0.53, test 0.56–0.58.
+- "Localized" (any overlap) drops with LoRA because the zero-shot model rewrites many lines, which overlaps
+  the developer's line by accident; "localized exact" is the informative one.
+- The zero-shot model writes an explanation before the code, and the generation budget (1.5 × input
+  tokens + 32) often ends inside the code block: only 47–55% of zero-shot outputs have a closed code block,
+  and an unclosed one never matches. A post-hoc check on the pairs where the zero-shot output is well-formed
+  (234 val / 277 test pairs) still gives LoRA +0.073 [0.030, 0.111] (val) and +0.079 [0.043, 0.112] (test)
+  exact match over zero-shot, so the gain is not only output format.
+- The 6.7B model zero-shot in 4-bit is no better than 1.3B zero-shot on exact match.
+- LoRA BLEU (89.8) is below the copy baseline (93.2): BLEU does not separate good from bad repairs here.
+- One seed, small tier, 1.3B model only.
+
+Cost (`results/costs.csv`): 14,991,360 trainable parameters (1.1% of 1.36B), adapter 59 MB, 2 epochs over
+3991 pairs in 35 min at 3.79 examples/s on a T4 (fp16). Figures: `results/figures/headline_test.png`,
+`by_pattern_test.png`, `loss_curve.png`, `detection_val.png`; error-analysis sample:
+`results/error_analysis.csv` (notes to be written by the students).
 
 ## Evaluation protocol in one paragraph
 

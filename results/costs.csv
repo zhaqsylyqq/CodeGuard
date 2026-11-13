@@ -1,0 +1,4 @@
+run,tier,model,method,rank,quantized,trained,trainable_parameters,total_parameters,trainable_share,adapter_mb,train_minutes,train_examples,train_samples_per_second,val_pairs_per_second,stopped_by_time_budget
+lora_1.3b_r16_small,small,deepseek-ai/deepseek-coder-1.3b-instruct,lora,16.0,False,True,14991360.0,1361463296,0.011011211278368536,59.420430183410645,35.1165840497,3991.0,3.79,1.3381963370701024,False
+zs_1.3b_small,small,deepseek-ai/deepseek-coder-1.3b-instruct,zero-shot,,False,False,,1346471936,,,,,,1.8953771687264849,
+zs_6.7b_small_4bit,small,deepseek-ai/deepseek-coder-6.7b-instruct,zero-shot,,True,False,,6740512768,,,,,,0.33923968771263,

@@ -1,0 +1,6 @@
+system,run,kind,tier,model,method,rank,split,n,accuracy,accuracy_low,accuracy_high,precision,recall,f1,roc_auc,pair_accuracy
+TF-IDF + logistic regression,baseline_metrics.json,isolated snippet,,,,,val,,0.523,,,0.5333,0.368,0.4355,,0.552
+BiLSTM,bilstm_small,isolated snippet,small,bilstm,,,val,1000.0,0.499,,,0.49624060150375937,0.132,0.20853080568720378,0.499788,
+fix direction,lora_1.3b_r16_small,pair (fix direction),small,deepseek-ai/deepseek-coder-1.3b-instruct,lora,16.0,val,500.0,0.492,0.446,0.5340499999999998,,,,,
+fix direction,zs_1.3b_small,pair (fix direction),small,deepseek-ai/deepseek-coder-1.3b-instruct,zero-shot,,val,500.0,0.5,0.456,0.546,,,,,
+fix direction,zs_6.7b_small_4bit,pair (fix direction),small,deepseek-ai/deepseek-coder-6.7b-instruct,zero-shot,,val,500.0,0.53,0.488,0.574,,,,,
