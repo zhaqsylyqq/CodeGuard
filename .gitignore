@@ -9,6 +9,8 @@ dist/
 data/raw/
 data/processed/
 runs/
+runs_smoke/
+logs/
 *.zip
 
 # tooling caches
