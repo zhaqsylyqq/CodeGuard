@@ -109,12 +109,24 @@ tar czf codeguard_runs.tgz --exclude='checkpoints' runs results logs
 That is `runs/` without `checkpoints/` (adapters, predictions and `metrics.json` are kept),
 `results/` and `logs/`.
 
-### Honest note on the GPU 5 queue
+### Honest note on the queues
 
-GPU 5 runs R1, R2, R3, R9 and R10 one after another. R2, R3 (generation on 7000 val+test pairs with
-the 6.7B model) and R9 are long evaluations, so this queue may not finish inside the window. R10
-(detection LoRA, a "should" run) is last on purpose: if something is cut, it is that one. The
-final summary says exactly which runs have no `metrics.json`, and the report must say so too.
+| GPU | Queue |
+|---|---|
+| 0 | R4 `lora_6.7b_r16` |
+| 1 | R5 `lora_6.7b_r8` |
+| 2 | R6 `lora_6.7b_r32` |
+| 3 | R7 `lora_1.3b_r16`, then R9 `cls_zs_6.7b`, R10 `cls_lora_6.7b_r16`, then R12 seeds 43/44 (optional) |
+| 4 | R8 `qlora_6.7b_r16` |
+| 5 | R1 `zs_1.3b`, R2 `zs_6.7b`, R3 `fs3_6.7b` |
+
+GPU 3 trains the small 1.3B model, which should finish well before its budget (an expectation, not a
+measurement), so the detection runs R9 and R10 follow it there. GPU 5 keeps only the three repair
+evaluations; R2 and R3 generate on 7000 val+test pairs with the 6.7B model and are long. The plan
+prints a WARNING for GPU 3 because two training runs x `BUDGET_MIN` exceed `WINDOW_MIN` in the worst
+case; check the preflight timing for the 1.3B model before the window. R12 (optional) stays last and
+starts only if time remains. The final summary says exactly which runs have no `metrics.json`, and
+the report must say so too.
 
 ---
 
@@ -227,9 +239,20 @@ tar czf codeguard_runs.tgz --exclude='checkpoints' runs results logs
 ```
 То есть `runs/` без `checkpoints/` (адаптеры, предсказания и `metrics.json` остаются), `results/` и `logs/`.
 
-### Честно про очередь GPU 5
+### Честно про очереди
 
-На GPU 5 по очереди идут R1, R2, R3, R9 и R10. R2, R3 (генерация на 7000 парах val+test моделью
-6.7B) и R9 — долгие оценки, поэтому эта очередь может не уложиться в окно. R10 (LoRA для
-детекции, приоритет "should") стоит последним специально: если что-то не успеет, то именно он.
+| GPU | Очередь |
+|---|---|
+| 0 | R4 `lora_6.7b_r16` |
+| 1 | R5 `lora_6.7b_r8` |
+| 2 | R6 `lora_6.7b_r32` |
+| 3 | R7 `lora_1.3b_r16`, затем R9 `cls_zs_6.7b`, R10 `cls_lora_6.7b_r16`, затем R12 с seed 43/44 (по желанию) |
+| 4 | R8 `qlora_6.7b_r16` |
+| 5 | R1 `zs_1.3b`, R2 `zs_6.7b`, R3 `fs3_6.7b` |
+
+GPU 3 обучает маленькую модель 1.3B, она должна закончить заметно раньше бюджета (это ожидание, а не
+замер), поэтому за ней идут запуски детекции R9 и R10. На GPU 5 остались только три оценки ремонта;
+R2 и R3 генерируют ответы на 7000 парах val+test моделью 6.7B и идут долго. План печатает WARNING для
+GPU 3: два обучения по `BUDGET_MIN` в худшем случае больше `WINDOW_MIN`; перед окном посмотрите замер
+скорости 1.3B в preflight. R12 (по желанию) стоит последним и стартует, только если остаётся время.
 Итоговая сводка показывает, у каких запусков нет `metrics.json`, и в отчёте это надо написать.

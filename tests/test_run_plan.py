@@ -64,8 +64,12 @@ def test_six_gpus_follow_the_table():
     found = queues(plan("0 1 2 3 4 5"))
     assert found["0"] == ["lora_6.7b_r16"]
     assert found["4"] == ["qlora_6.7b_r16"]
-    assert found["3"][0] == "lora_1.3b_r16"
-    assert found["5"] == ["zs_1.3b", "zs_6.7b", "fs3_6.7b", "cls_zs_6.7b", "cls_lora_6.7b_r16"]
+    # GPU 3 finishes R7 early, so the detection runs follow it there; the optional seeds come last.
+    assert found["3"] == ["lora_1.3b_r16", "cls_zs_6.7b", "cls_lora_6.7b_r16",
+                          "lora_6.7b_r16_s43", "lora_6.7b_r16_s44"]
+    assert found["5"] == ["zs_1.3b", "zs_6.7b", "fs3_6.7b"]
+    every = [run for runs in found.values() for run in runs]
+    assert sorted(every) == sorted(MUST + SHOULD + OPTIONAL)
 
 
 @pytest.mark.parametrize("gpus", ["0", "0 1", "2 5", "0 1 2"])

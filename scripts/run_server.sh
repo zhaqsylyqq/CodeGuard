@@ -167,9 +167,11 @@ if [ "$N_GPUS" -ge 6 ]; then
     QUEUE[0]="lora_6.7b_r16"
     QUEUE[1]="lora_6.7b_r8"
     QUEUE[2]="lora_6.7b_r32"
-    QUEUE[3]="lora_1.3b_r16 lora_6.7b_r16_s43 lora_6.7b_r16_s44"
+    # GPU 3 trains the small 1.3B model and finishes early, so it also takes the detection runs
+    # (R9, R10); the optional seed runs (R12) stay last. GPU 5 keeps the three repair evaluations.
+    QUEUE[3]="lora_1.3b_r16 cls_zs_6.7b cls_lora_6.7b_r16 lora_6.7b_r16_s43 lora_6.7b_r16_s44"
     QUEUE[4]="qlora_6.7b_r16"
-    QUEUE[5]="zs_1.3b zs_6.7b fs3_6.7b cls_zs_6.7b cls_lora_6.7b_r16"
+    QUEUE[5]="zs_1.3b zs_6.7b fs3_6.7b"
     QUEUE_COUNT=6
 else
     QUEUE_COUNT=$N_GPUS
@@ -210,8 +212,9 @@ print_plan() {
         echo "GPU ${GPU_LIST[$q]} queue: ${QUEUE[$q]}"
         echo "      (${labels# }; $n_train must/should training run(s) x $BUDGET_MIN min budget + evaluation)"
         if [ $((n_train * BUDGET_MIN)) -gt "$WINDOW_MIN" ]; then
-            echo "      WARNING: $((n_train * BUDGET_MIN)) min of training budget > WINDOW_MIN $WINDOW_MIN;" \
-                 "the later runs of this queue will not finish. Lower BUDGET_MIN or give more GPUs."
+            echo "      WARNING: $((n_train * BUDGET_MIN)) min of training budget > WINDOW_MIN $WINDOW_MIN" \
+                 "(worst case: every run uses its full budget); the later runs of this queue may not" \
+                 "finish. Check the preflight timing, lower BUDGET_MIN, or give more GPUs."
         fi
     done
     if [ -n "$LATE_RUNS" ]; then
