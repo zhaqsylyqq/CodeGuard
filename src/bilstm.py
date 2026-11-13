@@ -13,7 +13,7 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
-from experiment_utils import load_examples, save_report, seed_everything
+from experiment_utils import DEFAULT_DATA_DIR, load_examples, run_metadata, save_report, seed_everything
 
 
 def code_tokens(code):
@@ -127,8 +127,9 @@ def run(args):
                         "max_length": args.max_length, "epoch": epoch}, output / "best.pt")
     checkpoint = torch.load(output / "best.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["state_dict"])
-    metadata = {"model": "bilstm", "split": "val", "seed": args.seed,
-                "best_epoch": checkpoint["epoch"], "settings": vars(args), "history": history}
+    metadata = {"task": "detection", "model": "bilstm", "split": "val", "seed": args.seed,
+                "best_epoch": checkpoint["epoch"], "settings": vars(args), "history": history,
+                **run_metadata(args)}
     report = save_report(output, val, predict(model, val_loader, device), metadata)
     print(json.dumps(report, indent=2))
     return report
@@ -136,7 +137,7 @@ def run(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--data-dir", default="data/processed")
+    p.add_argument("--data-dir", default=DEFAULT_DATA_DIR, help="data/processed/small or data/processed/full")
     p.add_argument("--output", default="runs/bilstm")
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--batch-size", type=int, default=32)
