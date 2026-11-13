@@ -141,3 +141,21 @@ def test_report_does_not_import_torch():
     code = "import sys; sys.path.insert(0, 'src'); import make_report; print('torch' in sys.modules)"
     done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True)
     assert done.stdout.strip() == "False"
+
+
+def test_missing_localized_exact_interval_is_computed_from_predictions(tmp_path):
+    from experiment_utils import bootstrap_ci
+
+    runs, results = report(tmp_path)  # fixture metrics.json files have no localized_exact interval
+    for split in ("val", "test"):
+        predictions = pd.read_parquet(runs / "lora_1.3b_r16_small" / f"{split}_predictions.parquet")
+        expected = bootstrap_ci(predictions["localized_exact"].astype(float))
+        table = pd.read_csv(results / "results.csv")
+        row = table[(table["run"] == "lora_1.3b_r16_small") & (table["split"] == split)].iloc[0]
+        assert row["localized_exact_low"] == pytest.approx(expected["low"])
+        assert row["localized_exact_high"] == pytest.approx(expected["high"])
+    headline = json.loads((results / "headline.json").read_text(encoding="utf-8"))
+    assert all("localized_exact" in row for row in headline["rows"])
+    assert "localized_exact" in headline["comparisons"][0]
+    selection = json.loads((results / "selection.json").read_text(encoding="utf-8"))
+    assert "localized_exact_low" in selection["val_table"][0]

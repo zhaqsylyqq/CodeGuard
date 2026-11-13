@@ -203,7 +203,7 @@ def summarize(predictions):
         [localization_chance(b, f) for b, f in zip(predictions["buggy"], predictions["fixed"])]))
     overall["direction_chance"] = 0.5
     intervals = {}
-    for column in ("exact_match", "localized", "direction_correct"):
+    for column in ("exact_match", "localized", "localized_exact", "direction_correct"):
         if column in overall:
             intervals[column] = bootstrap_ci(predictions[column].astype(float))
     counts = predictions["sstub_pattern"].value_counts()

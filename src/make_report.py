@@ -18,15 +18,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from experiment_utils import paired_bootstrap_diff, write_json
+from experiment_utils import bootstrap_ci, paired_bootstrap_diff, write_json
 
 TRAINED = {"lora", "qlora"}
 REPLICATE = re.compile(r"_s\d+$")  # lora_6.7b_r16_s43 / _s44: seed replicates, never selected
 TIER_PREFERENCE = ("full", "small")
 METRICS = ("n", "exact_match", "changed", "localized", "localized_exact", "parse_ok", "direction_correct",
            "bleu", "copy_bleu", "copy_exact_match", "localization_chance", "direction_chance")
-INTERVALS = ("exact_match", "localized", "direction_correct")
-PAIRED = ("exact_match", "localized", "direction_correct")
+INTERVALS = ("exact_match", "localized", "localized_exact", "direction_correct")
+PAIRED = INTERVALS
 DESCRIBE = ("run", "tier", "model", "method", "rank", "quantized")
 RESULT_COLUMNS = (["section", "run", "split", "tier", "model", "method", "rank", "quantized", "used_for_selection",
                    "selected", "headline", *METRICS]
@@ -179,6 +179,25 @@ def read_predictions(runs_dir, name, split):
     return pd.read_parquet(path) if path.exists() else None
 
 
+def fill_missing_intervals(runs, runs_dir, split):
+    """Intervals an older metrics.json lacks (localized_exact was added later), computed from that run's
+    prediction file with the same bootstrap and seed as repair_utils.summarize. Only `split` is read."""
+    for run in runs:
+        result = get(run, "splits", split)
+        if not isinstance(result, dict):
+            continue
+        intervals = result.setdefault("intervals", {})
+        missing = [metric for metric in INTERVALS if metric not in intervals]
+        predictions = read_predictions(runs_dir, run["run"], split) if missing else None
+        if predictions is None:
+            continue
+        for metric in missing:
+            if metric in predictions.columns:
+                values = predictions[metric].dropna()
+                if len(values):
+                    intervals[metric] = bootstrap_ci(values.astype(float))
+
+
 def paired_difference(runs_dir, a, b, split="test"):
     """Paired bootstrap of a - b on the pair_ids both runs predicted."""
     left, right = read_predictions(runs_dir, a, split), read_predictions(runs_dir, b, split)
@@ -297,8 +316,8 @@ def print_val_table(val_rows, selection):
     low, high = table["exact_match_low"], table["exact_match_high"]
     table["exact_match [95% CI]"] = em + [
         "" if pd.isna(a) or pd.isna(b) else f" [{a:.3f}, {b:.3f}]" for a, b in zip(low, high)]
-    shown = ["run", "tier", "method", "rank", "n", "exact_match [95% CI]", "localized", "direction_correct",
-             "parse_ok", "changed"]
+    shown = ["run", "tier", "method", "rank", "n", "exact_match [95% CI]", "localized", "localized_exact",
+             "direction_correct", "parse_ok", "changed"]
     table = table[shown].sort_values(["tier", "run"], na_position="last")
     print("Val table (repair):")
     print(table.to_string(index=False, na_rep="", float_format=lambda v: f"{v:.3f}"))
@@ -319,12 +338,14 @@ def run(args):
     detection = [r for r in runs if task(r) == "detection"]
 
     # Selection: val only, written to disk before any test number is read.
+    fill_missing_intervals(repair, args.runs, "val")
     val_rows = val_table(repair)
     selection = select_final(val_rows)
     write_json(results / "selection.json", selection)
     print_val_table(val_rows, selection)
 
     # Test numbers from here on.
+    fill_missing_intervals(repair, args.runs, "test")
     headline = headline_runs(repair, selection)
     results_table(repair, selection, headline).to_csv(results / "results.csv", index=False)
     write_json(results / "headline.json", headline_summary(args.runs, headline, selection))
