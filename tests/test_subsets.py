@@ -67,3 +67,26 @@ def test_scripts_train_and_evaluate_on_prefixes(tmp_path):
             assert table["pair_id"].tolist() == list(range(offset, offset + n))
     shots = json.loads((tmp_path / "zs" / "metrics.json").read_text(encoding="utf-8"))["shot_pair_ids"]
     assert all(pid < 6 for pid in shots)  # chosen from the first 6 train pairs only
+
+
+def test_extending_a_prediction_prefix_equals_evaluating_all_at_once(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("sacrebleu")
+    sys.path.insert(0, str(ROOT / "tests"))
+    from eval_repair import parser, run
+    from test_train_repair import _pairs
+    from tiny_models import save_tiny_model
+
+    save_tiny_model(tmp_path / "tiny")
+    for split, (n, offset) in {"train": (8, 0), "val": (6, 100), "test": (6, 200)}.items():
+        _pairs(n, offset).to_parquet(tmp_path / f"{split}.parquet")
+    base = ["--model", str(tmp_path / "tiny"), "--data-dir", str(tmp_path), "--dtype", "fp32", "--batch-size", "4"]
+    run(parser().parse_args(base + ["--output", str(tmp_path / "all"), "--eval-pairs-test", "5"]))
+    run(parser().parse_args(base + ["--output", str(tmp_path / "grow"), "--eval-pairs-test", "2"]))
+    (tmp_path / "grow" / "metrics.json").unlink()
+    report = run(parser().parse_args(base + ["--output", str(tmp_path / "grow"), "--eval-pairs-test", "5"]))
+    whole = pd.read_parquet(tmp_path / "all" / "test_predictions.parquet")
+    grown = pd.read_parquet(tmp_path / "grow" / "test_predictions.parquet")
+    cols = ["pair_id", "prediction", "exact_match", "s_fwd", "s_bwd"]
+    pd.testing.assert_frame_equal(whole[cols], grown[cols], check_exact=False, rtol=1e-4)
+    assert report["splits"]["test"]["extended_to"] == 5 and report["splits"]["test"]["overall"]["n"] == 5

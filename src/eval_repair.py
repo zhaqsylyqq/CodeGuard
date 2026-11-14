@@ -32,8 +32,13 @@ def evaluate_run(model, tokenizer, data_dir, splits, output, shots=(), batch_siz
     results = {}
     for split in splits:
         path = output / f"{split}_predictions.parquet"
+        wanted = (first or {}).get(split)
         if path.exists():
             table = pd.read_parquet(path)
+            if wanted and len(table) < wanted and limit_pairs is None:
+                results[split] = extend_split(model, tokenizer, data_dir, split, path, table, wanted, shots,
+                                              batch_size, direction)
+                continue
             results[split] = {**summarize(table), "eval_seconds": None, "resumed": True}
             continue
         pairs = load_pairs(data_dir, split, limit_pairs, SUBSET_SEED, first=(first or {}).get(split))
@@ -45,6 +50,46 @@ def evaluate_run(model, tokenizer, data_dir, splits, output, shots=(), batch_siz
         print(f"{split}: exact match {summary['overall']['exact_match']:.4f} "
               f"on {len(pairs)} pairs in {seconds / 60:.1f} min", flush=True)
     return results
+
+
+EXTEND_CHUNK = 48
+
+
+def extend_split(model, tokenizer, data_dir, split, path, table, wanted, shots, batch_size, direction):
+    """Grow an existing prediction file (a prefix of the split) to the first `wanted` pairs.
+
+    Safe to merge because every pair's generation and direction score are independent of the other
+    pairs in its batch. Chunks are saved as they finish; with CODEGUARD_STOP_AT (unix time) set, no
+    chunk starts that would not end before it (estimated from the chunks so far), and the summary
+    covers the pairs actually done.
+    """
+    import os
+
+    import pandas as pd
+
+    pairs = load_pairs(data_dir, split, first=wanted)
+    done = len(table)
+    if table["pair_id"].tolist() != pairs["pair_id"].iloc[:done].tolist():
+        raise ValueError(f"{path} is not a prefix of the first {wanted} {split} pairs; refusing to merge")
+    stop_at = float(os.environ.get("CODEGUARD_STOP_AT", "inf"))
+    start, seconds_per_pair = time.monotonic(), None
+    while done < wanted:
+        chunk = pairs.iloc[done:done + EXTEND_CHUNK]
+        if seconds_per_pair is not None and time.time() + seconds_per_pair * len(chunk) > stop_at:
+            print(f"{split}: stopping the extension at {done} pairs (deadline)", flush=True)
+            break
+        t0 = time.monotonic()
+        part, _ = evaluate_split(model, tokenizer, chunk, shots, batch_size, direction)
+        seconds_per_pair = (time.monotonic() - t0) / len(chunk)
+        table = pd.concat([table, part], ignore_index=True)
+        table.to_parquet(path, index=False)
+        done = len(table)
+        print(f"{split}: {done}/{wanted} pairs", flush=True)
+    seconds = time.monotonic() - start
+    summary = summarize(table)
+    print(f"{split}: exact match {summary['overall']['exact_match']:.4f} on {len(table)} pairs "
+          f"(extended from an earlier prefix)", flush=True)
+    return {**summary, "eval_seconds": seconds, "extended_to": len(table), "requested": wanted}
 
 
 def parameter_count(parameter):
