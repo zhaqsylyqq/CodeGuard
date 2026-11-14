@@ -50,9 +50,22 @@ def main(args):
         good = {b: s for b, s in speeds.items() if s}
         result["eval_pairs_per_second_by_batch"] = speeds
         result["eval_batch"] = max(good, key=good.get)
+        if args.max_eval_batch:  # cap: the measured prefix is not the longest pairs
+            result["eval_batch"] = min(result["eval_batch"], args.max_eval_batch)
+            good.setdefault(result["eval_batch"], speeds.get(result["eval_batch"]))
         result["eval_pairs_per_second"] = good[result["eval_batch"]]
-        result["eval_pairs_per_second_3shot"] = preflight.measure_eval(
-            model, tokenizer, args.data_dir, args.eval_pairs, result["eval_batch"], 3)
+        # 3-shot prompts are about 3x longer: its own batch, halved on OOM
+        batch = result["eval_batch"]
+        while batch >= 1:
+            try:
+                result["eval_pairs_per_second_3shot"] = preflight.measure_eval(
+                    model, tokenizer, args.data_dir, args.eval_pairs, batch, 3)
+                result["eval_batch_3shot"] = batch
+                break
+            except torch.cuda.OutOfMemoryError:
+                print(f"      3-shot eval batch {batch}: CUDA out of memory", flush=True)
+                preflight.free_cuda()
+                batch //= 2
         result["ok"] = True
     result["minutes_total"] = (time.monotonic() - start) / 60
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +83,7 @@ def parser():
     p.add_argument("--eval-batches", type=int, nargs="+", default=[16, 32, 64])
     p.add_argument("--eval-pairs", type=int, default=64)
     p.add_argument("--steps", type=int, default=6)
+    p.add_argument("--max-eval-batch", type=int, help="never choose an eval batch above this")
     p.add_argument("--max-length", type=int, default=768)
     p.add_argument("--out", required=True)
     return p

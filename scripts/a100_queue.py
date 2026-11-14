@@ -57,8 +57,10 @@ class Queue:
                 return data
         cmd = [self.python, "scripts/measure_card.py", "--model", SPEC[size], "--out", str(path)]
         if size == "33b":
-            cmd += ["--quantized", "--train-batches", "16", "8", "4", "2", "--eval-batches", "8", "16", "32",
-                    "--eval-pairs", "32", "--steps", "4"]
+            # first attempt (06:49 UTC): batch 16 OOM, batch 8 fits; eval batch 32 OOM, then the 3-shot
+            # measurement OOMed at batch 16. Eval batch capped at 8 for the long 3-shot / longest pairs.
+            cmd += ["--quantized", "--train-batches", "8", "4", "2", "--eval-batches", "8",
+                    "--eval-pairs", "32", "--steps", "3", "--max-eval-batch", "8"]
         self.execute(f"measure_{size}", cmd)
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"ok": False}
 
@@ -114,15 +116,16 @@ class Queue:
 
 
 def choose_prefix(left, m33, m67, load33):
-    """Largest eval prefix k (pairs per split) and QLoRA budget so that qlora_33b + its eval, zs_33b,
-    fs3_33b, zs_6.7b and fs3_6.7b all fit in `left` minutes. Returns (k, budget) or (k, None)."""
+    """Largest eval prefix k (pairs per split, shared by every run) and the QLoRA budget so that
+    qlora_33b + its evaluation, zs_33b and fs3_33b fit in `left` minutes. The 6.7B evaluations are not
+    reserved for: they run afterwards if time remains (33B cannot run anywhere else; 6.7B can).
+    The first budget tried is what one epoch over 4000 pairs needs at the measured speed (<= 90 min)."""
     def evals(k):
         e33 = 2 * k / m33["eval_pairs_per_second"] / 60 * SAFETY
         f33 = 2 * k / m33["eval_pairs_per_second_3shot"] / 60 * SAFETY
-        e67 = 2 * k / m67["eval_pairs_per_second"] / 60 * SAFETY
-        f67 = 2 * k / m67["eval_pairs_per_second_3shot"] / 60 * SAFETY
-        return 4 * load33 + 2 * e33 + f33 + 2 * LOAD_MIN["6.7b"] + e67 + f67 + 5
-    for budget in (90, 60, 45, 30):
+        return 4 * load33 + 2 * e33 + f33 + 5
+    needed = 4000 / m33["examples_per_second"] / 60 * 1.15
+    for budget in (min(90, needed), 60, 45, 30):
         for k in (500, 400, 300, 250, 200, 150, 100):
             if evals(k) + budget + MARGIN_MIN <= left:
                 return k, budget
@@ -144,9 +147,10 @@ def train_cmd(python, size, name, m, data, budget, quantized=False, extra=(), k=
 
 
 def eval_cmd(python, size, name, m, shots, quantized=False, k=500):
+    batch = m.get("eval_batch_3shot", m["eval_batch"]) if shots else m["eval_batch"]
     cmd = [python, "src/eval_repair.py", "--model", SPEC[size].split("@")[0], "--revision", SPEC[size].split("@")[1],
            "--data-dir", SMALL, "--output", f"runs/{name}", "--shots", str(shots),
-           "--batch-size", str(m["eval_batch"]), "--eval-pairs-val", str(k), "--eval-pairs-test", str(k),
+           "--batch-size", str(batch), "--eval-pairs-val", str(k), "--eval-pairs-test", str(k),
            "--seed", "42"]
     return cmd + (["--quantized"] if quantized else [])
 
@@ -175,7 +179,7 @@ def main(args):
         if m33.get("ok"):
             log(f"33B: batch {m33['batch']}, {m33['examples_per_second']:.2f} ex/s, eval batch {m33['eval_batch']}, "
                 f"{m33['eval_pairs_per_second']:.2f} pairs/s (3-shot {m33['eval_pairs_per_second_3shot']:.2f})")
-            load33 = max(LOAD_MIN["33b"], m33.get("load_minutes", 0))
+            load33 = m33.get("load_minutes", LOAD_MIN["33b"]) + 1  # measured load time, plus a minute
             LOAD_MIN["33b"] = load33
             k, budget33 = choose_prefix(q.minutes_left(), m33, m67, load33)
             if budget33:
