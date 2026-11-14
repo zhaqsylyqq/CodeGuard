@@ -41,7 +41,8 @@ step() {  # name script
     fi
     say "$name"
     if bash "server/$script"; then
-        date > ".server_state/$name.done"
+        if [ "${DRY_RUN:-0}" = "1" ]; then echo "-- $name: DRY_RUN=1, not marked as passed"
+        else date > ".server_state/$name.done"; fi
     else
         die "$name failed. Fix the problem printed above and run the same command again. Log: logs/run_all.log"
     fi

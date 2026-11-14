@@ -11,7 +11,7 @@ found=0
 for log in "$LOGS"/*.log; do
     [ -e "$log" ] || continue
     name="$(basename "$log" .log)"
-    case "$name" in preflight*|make_report|server_window) continue ;; esac
+    case "$name" in preflight*|make_report|server_window|run_all) continue ;; esac
     found=1
     if [ -f "$RUNS/$name/metrics.json" ]; then state="DONE   "; else state="running or failed"; fi
     last="$(tail -c 2000 "$log" | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-110)"

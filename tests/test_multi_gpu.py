@@ -75,3 +75,33 @@ def test_timing_file_merges_measurements(tmp_path):
     preflight.save_timing(path, "33b", {"ok": False})
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["main"]["examples_per_second"] == 3.0 and data["33b"]["ok"] is False
+
+
+def test_timing_run_measures_training_and_evaluation_on_a_tiny_model(tmp_path, monkeypatch):
+    """The preflight timing code end to end on CPU (CUDA bookkeeping calls replaced by no-ops)."""
+    from types import SimpleNamespace
+
+    pytest.importorskip("peft")
+    pytest.importorskip("sacrebleu")
+    sys.path.insert(0, str(ROOT / "tests"))
+    import preflight
+    from test_train_repair import _pairs
+    from tiny_models import save_tiny_model
+
+    for name in ("reset_peak_memory_stats", "synchronize", "empty_cache"):
+        monkeypatch.setattr(torch.cuda, name, lambda *a, **k: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a, **k: 0)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda *a: SimpleNamespace(total_memory=1))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)  # the tiny model stays on the CPU
+    monkeypatch.setattr(preflight, "problems", [])
+    save_tiny_model(tmp_path / "tiny")
+    for split, (n, offset) in {"train": (24, 0), "val": (6, 100), "test": (4, 200)}.items():
+        _pairs(n, offset).to_parquet(tmp_path / f"{split}.parquet")
+    result = preflight.timing_run(str(tmp_path / "tiny"), str(tmp_path), [4, 2], steps=2, max_length=400,
+                                  eval_batch=3, eval_pairs=3)
+    assert preflight.problems == []
+    assert result["batch"] == 4 and result["examples_per_second"] > 0
+    assert result["eval_pairs_per_second"] > 0 and result["eval_pairs_per_second_3shot"] > 0
+    preflight.save_timing(tmp_path / "timing.json", "main", result)
+    assert json.loads((tmp_path / "timing.json").read_text(encoding="utf-8"))["main"]["batch"] == 4

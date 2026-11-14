@@ -40,3 +40,16 @@ def test_forbidden_paths_are_refused():
 def test_missing_data_is_reported(tmp_path):
     with pytest.raises(FileNotFoundError, match="01_data"):
         mb.data_files(tmp_path)
+
+
+@pytest.mark.skipif(not in_git_checkout(), reason="needs git and a git checkout")
+def test_server_bundle_has_the_kit_with_linux_line_endings(tmp_path):
+    output = tmp_path / "server.zip"
+    paths = mb.build(output, with_data=False, server=True)
+    with zipfile.ZipFile(output) as bundle:
+        for required in mb.SERVER_REQUIRED:
+            if not required.startswith("data/"):
+                assert required in paths
+        for name in bundle.namelist():
+            if name.endswith((".sh", ".env")):
+                assert b"\r\n" not in bundle.read(name), name

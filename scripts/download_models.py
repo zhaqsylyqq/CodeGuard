@@ -20,6 +20,9 @@ from pathlib import Path
 SMALL = "deepseek-ai/deepseek-coder-1.3b-instruct"
 MAIN = "deepseek-ai/deepseek-coder-6.7b-instruct"
 LARGE = "deepseek-ai/deepseek-coder-33b-instruct"
+# Revisions the experiments use (scripts/server_plan.py); downloads default to exactly these.
+PINNED = {SMALL: "e063262dac8366fc1f28a4da0ff3c50ea66259ca", MAIN: "e5d64addd26a6a1db0f9b863abf6ee3141936807",
+          LARGE: "61dc97b922b13995e7f83b7c8397701dbf9cfd4c"}
 
 # Duplicate weight formats skipped when safetensors exist (pytorch_model*.bin and its index).
 DUPLICATE_WEIGHTS = ["*.bin", "*.bin.index.json", "*.pt", "*.pth", "*.ckpt", "*.h5", "*.msgpack"]
@@ -58,8 +61,9 @@ def folder_size_gb(path):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--models", nargs="+", default=[SMALL, MAIN],
-                   help="model ids, optionally pinned as id@sha (default: 1.3B and 6.7B instruct)")
+    p.add_argument("--models", nargs="+", default=[f"{SMALL}@{PINNED[SMALL]}", f"{MAIN}@{PINNED[MAIN]}"],
+                   help="model ids, optionally pinned as id@sha (default: 1.3B and 6.7B instruct at the "
+                        "pinned revisions)")
     p.add_argument("--with-33b", action="store_true", help=f"also download {LARGE}")
     p.add_argument("--revisions-only", action="store_true",
                    help="print the commit sha each model resolves to and download nothing")
@@ -72,7 +76,8 @@ def parser():
 def main(args):
     from huggingface_hub import HfApi, snapshot_download
 
-    specs = list(args.models) + ([LARGE] if args.with_33b and LARGE not in args.models else [])
+    ids = [split_spec(spec)[0] for spec in args.models]
+    specs = list(args.models) + ([f"{LARGE}@{PINNED[LARGE]}"] if args.with_33b and LARGE not in ids else [])
     api = HfApi()
     for spec in specs:
         model_id, pinned = split_spec(spec)
