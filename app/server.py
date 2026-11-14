@@ -113,7 +113,7 @@ def repair(request: RepairRequest):
         start = time.perf_counter()
         [(raw, _)] = generate_repairs(state["model"], state["tokenizer"], [code], batch_size=1)
         seconds = time.perf_counter() - start
-    fixed, parse_ok = parse_output(raw)
+    fixed, parse_ok = parse_output(raw, prefilled=True)
     diff = difflib.unified_diff(code.split("\n"), fixed.split("\n"), "input", "suggested fix", lineterm="")
     last = normalize_code(code).count("\n")  # index of the last normalized line
     return {

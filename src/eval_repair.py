@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from experiment_utils import DEFAULT_DATA_DIR, load_pairs, run_metadata, seed_everything, write_json
-from repair_utils import choose_shots, evaluate_split, summarize
+from repair_utils import GENERATION_RULE, choose_shots, evaluate_split, summarize
 
 SUBSET_SEED = 42  # --limit-pairs subsets are the same pairs for every run, so runs can be paired
 
@@ -87,7 +87,7 @@ def run(args):
     report = {
         "run": output.name, "task": "repair", "method": method, "model": args.model,
         "revision": args.revision, "adapter": args.adapter, "quantized": args.quantized,
-        "shots": args.shots, "shot_pair_ids": shot_ids, "splits": results,
+        "shots": args.shots, "shot_pair_ids": shot_ids, "generation": GENERATION_RULE, "splits": results,
         "eval_seconds": time.monotonic() - start, **count_parameters(model), **run_metadata(args),
     }
     write_json(output / "metrics.json", report)

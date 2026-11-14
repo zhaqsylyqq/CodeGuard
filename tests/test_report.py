@@ -1,6 +1,7 @@
 """make_report.py on fabricated run directories (tests/fixtures/report_runs.py); no real results involved."""
 
 import json
+import shutil
 import subprocess
 import sys
 from argparse import Namespace
@@ -159,3 +160,18 @@ def test_missing_localized_exact_interval_is_computed_from_predictions(tmp_path)
     assert "localized_exact" in headline["comparisons"][0]
     selection = json.loads((results / "selection.json").read_text(encoding="utf-8"))
     assert "localized_exact_low" in selection["val_table"][0]
+
+
+def test_runs_with_the_old_generation_rule_are_only_listed_as_superseded(tmp_path):
+    runs, results = make_runs(tmp_path / "w")
+    old = runs / "zs_1.3b_small_truncated_v1"
+    shutil.copytree(runs / "zs_1.3b_small", old)
+    metrics = json.loads((old / "metrics.json").read_text(encoding="utf-8"))
+    del metrics["generation"]
+    (old / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    assert make_report.run(Namespace(runs=str(runs), results=str(results))) == 0
+    superseded = pd.read_csv(results / "superseded.csv")
+    assert set(superseded["run"]) == {"zs_1.3b_small_truncated_v1"} and set(superseded["split"]) == {"val", "test"}
+    assert "zs_1.3b_small_truncated_v1" not in set(pd.read_csv(results / "results.csv")["run"])
+    selection = json.loads((results / "selection.json").read_text(encoding="utf-8"))
+    assert "zs_1.3b_small_truncated_v1" not in {row["run"] for row in selection["val_table"]}

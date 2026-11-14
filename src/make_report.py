@@ -19,6 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from experiment_utils import bootstrap_ci, paired_bootstrap_diff, write_json
+from repair_utils import GENERATION_RULE
 
 TRAINED = {"lora", "qlora"}
 REPLICATE = re.compile(r"_s\d+$")  # lora_6.7b_r16_s43 / _s44: seed replicates, never selected
@@ -67,6 +68,13 @@ def task(run):
     if run.get("task"):
         return run["task"]
     return "detection" if run["run"].startswith(("cls_", "bilstm")) else "repair"
+
+
+def is_current(run):
+    """Repair runs evaluated with the current generation rule (prefilled fence, stop at the closing
+    fence). Older runs let the model explain first and were cut off by the token budget; they are
+    reported only in superseded.csv, never compared or selected."""
+    return task(run) != "repair" or run.get("generation") == GENERATION_RULE
 
 
 def tier(run):
@@ -172,6 +180,15 @@ def results_table(repair_runs, selection, headline):
                               "test headline" if row["headline"] else "test appendix (not used for selection)")
             rows.append(row)
     return pd.DataFrame(rows, columns=RESULT_COLUMNS)
+
+
+def superseded_table(runs):
+    """Runs evaluated with the old generation rule: their own numbers, for the report's lesson only."""
+    rows = [{**split_row(run, split), "generation": run.get("generation") or "v1 (no prefill, truncated)"}
+            for run in runs for split in ("val", "test") if get(run, "splits", split) is not None]
+    columns = ["run", "split", "model", "method", "generation", "n", "exact_match", "exact_match_low",
+               "exact_match_high", "localized_exact", "parse_ok", "direction_correct"]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def read_predictions(runs_dir, name, split):
@@ -334,8 +351,12 @@ def run(args):
         return 0
     results = Path(args.results)
     results.mkdir(parents=True, exist_ok=True)
-    repair = [r for r in runs if task(r) == "repair"]
+    superseded = [r for r in runs if task(r) == "repair" and not is_current(r)]
+    repair = [r for r in runs if task(r) == "repair" and is_current(r)]
     detection = [r for r in runs if task(r) == "detection"]
+    superseded_table(superseded).to_csv(results / "superseded.csv", index=False)
+    if superseded:
+        print("Superseded (old generation rule, not compared): " + ", ".join(r["run"] for r in superseded))
 
     # Selection: val only, written to disk before any test number is read.
     fill_missing_intervals(repair, args.runs, "val")

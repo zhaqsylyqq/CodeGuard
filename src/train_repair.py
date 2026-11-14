@@ -12,7 +12,7 @@ from pathlib import Path
 
 from eval_repair import SUBSET_SEED, count_parameters, evaluate_run
 from experiment_utils import DEFAULT_DATA_DIR, load_pairs, run_metadata, seed_everything, write_json
-from repair_utils import encode_example
+from repair_utils import GENERATION_RULE, encode_example
 
 
 def lora_target_modules(model):
@@ -174,7 +174,8 @@ def run(args):
     report = {
         "run": output.name, "task": "repair", "method": "qlora" if args.quantized else "lora",
         "model": args.model, "revision": args.revision, "adapter": str(output / "adapter"),
-        "rank": args.rank, "quantized": args.quantized, "shots": 0, "splits": results,
+        "rank": args.rank, "quantized": args.quantized, "shots": 0, "generation": GENERATION_RULE,
+        "splits": results,
         "eval_seconds": time.monotonic() - start, **info, **run_metadata(args),
     }
     write_json(output / "metrics.json", report)

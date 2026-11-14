@@ -18,6 +18,8 @@ INSTRUCTION = (
     "block and nothing else."
 )
 FENCE = "```"
+ANSWER_PREFIX = f"{FENCE}python\n"  # prefilled at generation: the model continues inside the code block
+GENERATION_RULE = "prefill_fence_v2"  # recorded in metrics.json; runs without it used the old rule (v1)
 MAX_NEW_TOKENS_CAP = 512
 MIN_PATTERN_PAIRS = 30  # bug types with fewer pairs are grouped as OTHER in breakdowns
 
@@ -92,6 +94,32 @@ def encode_example(tokenizer, buggy, fixed, shots=()):
             "labels": [-100] * len(prompt) + target}
 
 
+def answer_lead(tokenizer, buggy, shots=()):
+    """What the chat template writes before the answer, plus the opening code fence.
+
+    Generation is prefilled with this text, so every setting (zero-shot, few-shot, LoRA) starts
+    writing code at once instead of spending its token budget on an explanation first.
+    """
+    probe = "pass"
+    target = target_text(tokenizer, buggy, probe, shots)
+    return target[:target.find(assistant_message(probe))] + ANSWER_PREFIX
+
+
+def encode_generation_prompt(tokenizer, buggy, shots=()):
+    """Prompt tokens plus the prefilled answer lead, tokenized as in training (prompt and answer apart)."""
+    return encode_prompt(tokenizer, buggy, shots) + token_ids(tokenizer, answer_lead(tokenizer, buggy, shots))
+
+
+def check_prefill(tokenizer, buggy, fixed, shots=()):
+    """The prefilled tokens must be exactly the first tokens of the training target; otherwise a LoRA
+    model would see a token sequence at generation that it never saw in training."""
+    lead = token_ids(tokenizer, answer_lead(tokenizer, buggy, shots))
+    target = token_ids(tokenizer, target_text(tokenizer, buggy, fixed, shots))
+    if target[:len(lead)] != lead:
+        raise ValueError("Prefill mismatch: the training target does not start with the tokens of "
+                         f"{answer_lead(tokenizer, buggy, shots)!r} for this tokenizer")
+
+
 def max_new_tokens(tokenizer, buggy):
     """Generation budget: enough for the fenced fix, never more than 512 tokens."""
     return min(MAX_NEW_TOKENS_CAP, int(1.5 * len(token_ids(tokenizer, buggy)) + 32))
@@ -116,12 +144,25 @@ def choose_shots(train, k=3, seed=42, max_lines=6, max_chars=300):
 # ---------------------------------------------------------------- parsing
 
 
-def parse_output(text):
-    """Code from the first fenced block (or the raw text if there is none) and whether a block was found.
+def parse_output(text, prefilled=True):
+    """Code of the answer and whether its code block was closed.
+
+    prefilled=True (current rule): `text` is what the model wrote after the prefilled opening fence,
+    so the code runs up to the first fence, which closes the block; no fence means the token budget
+    ended inside the block. prefilled=False (old v1 outputs): code from the first fenced block, or the
+    raw text if there is none.
 
     Exactly one leading and one trailing newline are removed; leading spaces of the first line are
     kept because indentation is meaningful in Python.
     """
+    if prefilled:
+        end = text.find(FENCE)
+        code, parse_ok = (text, False) if end == -1 else (text[:end], True)
+        if code.startswith("\n"):
+            code = code[1:]
+        if code.endswith("\n"):
+            code = code[:-1]
+        return code, parse_ok
     start = text.find(FENCE)
     if start == -1:
         code, parse_ok = text, False
@@ -221,18 +262,42 @@ def summarize(predictions):
 # ---------------------------------------------------------------- model calls
 
 
+def fence_stop_criteria(tokenizer, width):
+    """Stops each sequence once its generated part contains a code fence (the block is closed)."""
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class FenceClosed(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kwargs):
+            tails = input_ids[:, width:][:, -4:].tolist()  # a fence spans at most three tokens
+            done = [FENCE in tokenizer.decode(tail, skip_special_tokens=True) for tail in tails]
+            return torch.tensor(done, dtype=torch.bool, device=input_ids.device)
+
+    return StoppingCriteriaList([FenceClosed()])
+
+
+def cut_at_fence(tokenizer, tokens):
+    """Tokens up to and including the one that completes the first code fence."""
+    for end in range(1, len(tokens) + 1):
+        if FENCE in tokenizer.decode(tokens[max(0, end - 4):end], skip_special_tokens=True):
+            return tokens[:end]
+    return tokens
+
+
 def generate_repairs(model, tokenizer, buggies, shots=(), batch_size=8):
     """Greedy, batched, left-padded generation. Returns [(raw_text, n_new_tokens)] in input order.
 
-    Each item keeps only its own token budget and stops at its own end-of-turn token, so the result
-    does not depend on which other items share its batch.
+    The answer is prefilled with the opening code fence (`answer_lead`), so `raw_text` is what the
+    model wrote after it. Each item stops when its code block is closed, at its end-of-turn token or
+    at its own token budget (`max_new_tokens`), whichever comes first, so the result does not depend
+    on which other items share its batch.
     """
     import torch
 
     from llm_utils import model_device
 
     model.eval()
-    prompts = [encode_prompt(tokenizer, buggy, shots) for buggy in buggies]
+    prompts = [encode_generation_prompt(tokenizer, buggy, shots) for buggy in buggies]
     budgets = [max_new_tokens(tokenizer, buggy) for buggy in buggies]
     order = sorted(range(len(prompts)), key=lambda i: len(prompts[i]), reverse=True)
     pad, stop = tokenizer.pad_token_id, stop_token_id(tokenizer)
@@ -247,11 +312,12 @@ def generate_repairs(model, tokenizer, buggies, shots=(), batch_size=8):
             generated = model.generate(
                 input_ids=input_ids.to(device), attention_mask=attention.to(device),
                 max_new_tokens=max(budgets[i] for i in batch), do_sample=False,
-                eos_token_id=stop, pad_token_id=pad)
+                eos_token_id=stop, pad_token_id=pad, stopping_criteria=fence_stop_criteria(tokenizer, width))
             for row, i in enumerate(batch):
                 tokens = generated[row, width:].tolist()[:budgets[i]]
                 if stop in tokens:
                     tokens = tokens[:tokens.index(stop) + 1]
+                tokens = cut_at_fence(tokenizer, tokens)
                 results[i] = (tokenizer.decode(tokens, skip_special_tokens=True), len(tokens))
     return results
 
@@ -293,6 +359,8 @@ def direction_scores(model, tokenizer, buggies, fixeds, shots=(), batch_size=8):
 def evaluate_split(model, tokenizer, pairs, shots=(), batch_size=8, direction=True):
     """Predictions table for one split (one row per pair) and its summary metrics."""
     buggies, fixeds = pairs["buggy"].tolist(), pairs["fixed"].tolist()
+    for buggy, fixed in list(zip(buggies, fixeds))[:20]:
+        check_prefill(tokenizer, buggy, fixed, shots)
     outputs = generate_repairs(model, tokenizer, buggies, shots, batch_size)
     rows = []
     for buggy, fixed, (raw, n_new) in zip(buggies, fixeds, outputs):

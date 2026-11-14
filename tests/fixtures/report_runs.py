@@ -128,6 +128,7 @@ def make_runs(root, test_rates=None):
             splits[split] = summary(table)
         metrics = {"fixture": FAKE, "run": name, "task": "repair", "method": method, "model": model,
                    "revision": None, "quantized": method == "qlora", "shots": 3 if method == "3-shot" else 0,
+                   "generation": "prefill_fence_v2",
                    "splits": splits, "eval_seconds": 20.0, "total_parameters": 6_700_000_000,
                    "trainable_parameters": 6_700_000_000,
                    "args": {"data_dir": f"data/processed/{tier}"}}
@@ -142,7 +143,7 @@ def make_runs(root, test_rates=None):
     # A run with fields missing: no rank, no test split, no intervals, no cost fields.
     val = predictions("lora_6.7b_r32", "val", "full", 0.2)
     write(runs / "lora_6.7b_r32" / "metrics.json",
-          {"fixture": FAKE, "task": "repair", "method": "lora", "model": M67,
+          {"fixture": FAKE, "task": "repair", "method": "lora", "model": M67, "generation": "prefill_fence_v2",
            "args": {"data_dir": "data/processed/full"},
            "splits": {"val": {"overall": rates(val)}}})
     # Legacy detection runs (one without a "task" field) and an unfinished run without metrics.json.

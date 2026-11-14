@@ -10,10 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from experiment_utils import bootstrap_ci, paired_bootstrap_diff
 from repair_utils import (
+    ANSWER_PREFIX,
+    answer_lead,
     assistant_message,
+    check_prefill,
     choose_shots,
     edited_lines,
     encode_example,
+    encode_generation_prompt,
     encode_prompt,
     localization_chance,
     max_new_tokens,
@@ -87,27 +91,27 @@ def test_max_new_tokens_rule():
 
 
 def test_parse_fenced_block_with_text_around_it():
-    code, ok = parse_output("Here is the fix:\n```python\n    return x + 1\n```\nDone.\n```python\nother\n```")
+    code, ok = parse_output("Here is the fix:\n```python\n    return x + 1\n```\nDone.\n```python\nother\n```", prefilled=False)
     assert ok and code == "    return x + 1"
 
 
 def test_parse_keeps_indentation_and_strips_only_one_newline():
-    code, ok = parse_output("```python\n\n    a = 1\n\n```")
+    code, ok = parse_output("```python\n\n    a = 1\n\n```", prefilled=False)
     assert ok and code == "\n    a = 1\n"
 
 
 def test_parse_without_fence_takes_raw_text():
-    code, ok = parse_output("    x = 2\n")
+    code, ok = parse_output("    x = 2\n", prefilled=False)
     assert not ok and code == "    x = 2"
 
 
 def test_parse_unclosed_fence_is_not_ok():
-    code, ok = parse_output("```python\n    x = 2\n    y")
+    code, ok = parse_output("```python\n    x = 2\n    y", prefilled=False)
     assert not ok and code == "    x = 2\n    y"
 
 
 def test_parse_fence_without_language_tag():
-    assert parse_output("```\nx = 1\n```") == ("x = 1", True)
+    assert parse_output("```\nx = 1\n```", prefilled=False) == ("x = 1", True)
 
 
 # ---------------------------------------------------------------- metrics
@@ -260,3 +264,67 @@ def test_left_padded_batch_generation_matches_one_by_one():
     assert batched == single
     for buggy, (_, n_new) in zip(buggies, batched):
         assert 1 <= n_new <= max_new_tokens(tokenizer, buggy)
+
+
+# ---------------------------------------------------------------- fair generation (prefilled fence)
+
+
+def test_prefilled_parse_takes_code_up_to_the_closing_fence():
+    assert parse_output("    return x + 1\n```") == ("    return x + 1", True)
+    assert parse_output("a = 1\nb = 2\n```\nThis fixes it.") == ("a = 1\nb = 2", True)
+    assert parse_output("a = 1\nb = (") == ("a = 1\nb = (", False)  # budget ended inside the block
+
+
+def test_generation_prompt_is_the_prompt_plus_the_opening_fence():
+    tokenizer = make_tokenizer()
+    for shots in ((), [("a = 1", "a = 2")]):
+        ids = encode_generation_prompt(tokenizer, BUGGY, shots)
+        assert tokenizer.decode(ids) == tokenizer.decode(encode_prompt(tokenizer, BUGGY, shots)) + ANSWER_PREFIX
+        assert answer_lead(tokenizer, BUGGY, shots) == ANSWER_PREFIX
+        check_prefill(tokenizer, BUGGY, FIXED, shots)
+        # The training sequence continues the generation prompt token for token.
+        assert encode_example(tokenizer, BUGGY, FIXED, shots)["input_ids"][:len(ids)] == ids
+
+
+def test_real_deepseek_prefill_matches_its_chat_template():
+    transformers = pytest.importorskip("transformers")
+    try:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            "deepseek-ai/deepseek-coder-1.3b-instruct", local_files_only=True)
+    except OSError:
+        pytest.skip("deepseek-coder-1.3b-instruct tokenizer is not in the local HF cache")
+    from repair_utils import build_messages, token_ids
+
+    # The template's own "continue the assistant message" rendering gives the same tokens ...
+    messages = build_messages(BUGGY) + [{"role": "assistant", "content": ANSWER_PREFIX}]
+    rendered = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
+    ids = encode_generation_prompt(tokenizer, BUGGY)
+    assert token_ids(tokenizer, rendered) == ids
+    # ... and the prefilled tokens are the first tokens of the training sequence.
+    check_prefill(tokenizer, BUGGY, FIXED)
+    assert encode_example(tokenizer, BUGGY, FIXED)["input_ids"][:len(ids)] == ids
+
+
+def test_trained_model_does_not_repeat_the_prefilled_fence_and_stops_at_the_closing_one():
+    torch = pytest.importorskip("torch")
+    from repair_utils import generate_repairs
+
+    tokenizer = make_tokenizer()
+    model = make_model(tokenizer, seed=1)
+    # Overfit the tiny model on one training example; its target starts with the opening fence.
+    item = encode_example(tokenizer, BUGGY, FIXED)
+    batch = {key: torch.tensor([value]) for key, value in item.items()}
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    model.train()
+    for _ in range(400):
+        loss = model(**batch).loss
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        if loss.item() < 1e-3:
+            break
+    [(raw, n_new)] = generate_repairs(model, tokenizer, [BUGGY], batch_size=1)
+    assert not raw.startswith("`")      # the fence is prefilled, not generated a second time
+    assert raw == FIXED + "\n```"       # stops when the block closes, before "\n<eot>"
+    assert n_new == len(FIXED + "\n```")
+    assert parse_output(raw) == (FIXED, True)
