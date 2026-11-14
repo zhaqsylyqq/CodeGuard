@@ -2,7 +2,9 @@
 
 Checks: Python and packages; CUDA; per GPU name, total and FREE memory; free disk; data tier files
 and row counts; every model resolves from the local HF cache (offline); bf16; a real LoRA forward +
-backward pass of the 1.3B model on 2 real pairs. Then a timing run of the main config on one GPU:
+backward pass of the 1.3B model on 2 real pairs. Then a timing run of the main config on one GPU (training
+and evaluation speed, written to --timing-json for run_server.sh), and with --check-33b a 4-bit 33B QLoRA check
+over two GPUs in a separate process (its failure only warns: set WITH_33B=0). Timing run details:
 the largest per-device batch that fits, examples/second, projected hours, recommended BATCH/ACCUM.
 
 Examples:
@@ -39,7 +41,7 @@ PACKAGES = ("torch", "transformers", "peft", "accelerate", "bitsandbytes", "hugg
             "pandas", "pyarrow", "sacrebleu")
 SCRIPTS = ("train_repair.py", "eval_repair.py", "make_report.py", "llm_baseline.py", "train_lora.py")
 EFFECTIVE_BATCH = 32
-PROJECTED_PAIRS, PROJECTED_EPOCHS = 50000, 2
+PROJECTED_PAIRS = 50000  # full tier, one epoch
 
 problems = []
 
@@ -261,59 +263,55 @@ def fits(model, batch):
         model.zero_grad(set_to_none=True)
 
 
-def timing_run(spec, data_dir, candidates, steps, max_length, seed=42):
+def measure_training(model, tokenizer, train, candidates, steps, max_length, seed=42, label="timing"):
+    """Largest batch of `candidates` that fits the longest examples, then timed optimizer steps.
+    Returns (batch, examples per second) or None after reporting the failure."""
     import random
 
     import torch
 
-    from experiment_utils import load_pairs
     from llm_utils import AnswerCollator, model_device
-    from train_repair import build_lora_model
 
-    model_id, revision = split_spec(spec)
-    print(f"\nTiming run: {model_id}, LoRA r16, max length {max_length}, batches {candidates}", flush=True)
-    model, tokenizer = build_lora_model(model_id, revision=revision, rank=16)
     model.train()
     device = model_device(model)
     collate = AnswerCollator(tokenizer.pad_token_id)
-    train = load_pairs(data_dir, "train")
-
     longest = encode_longest(tokenizer, train, max(candidates), max_length)
     if not longest:
-        fail(f"timing: no train example fits --max-length {max_length}")
-        return
+        fail(f"{label}: no train example fits --max-length {max_length}")
+        return None
     print(f"      probing with the longest train examples ({len(longest[-1]['input_ids'])}-"
           f"{len(longest[0]['input_ids'])} tokens)", flush=True)
     chosen = None
     for size in candidates:
         if size > len(longest):
             continue
-        torch.cuda.reset_peak_memory_stats()
+        for index in range(torch.cuda.device_count()):
+            torch.cuda.reset_peak_memory_stats(index)
         batch = to_device(collate(longest[:size]), device)
         good = fits(model, batch)
         del batch
         free_cuda()
-        peak, total = torch.cuda.max_memory_allocated(), torch.cuda.get_device_properties(0).total_memory
-        result = f"fits, peak {peak / 2**30:.1f} GiB" if good else "CUDA out of memory"
+        peak, total = torch.cuda.max_memory_allocated(0), torch.cuda.get_device_properties(0).total_memory
+        result = f"fits, peak {peak / 2**30:.1f} GiB on the first card" if good else "CUDA out of memory"
         print(f"      batch {size:>2}: {result}", flush=True)
         if good and peak > total:
             warn("peak exceeds the card's memory: the driver spilled into system RAM (Windows "
-                 "'sysmem fallback'); this batch size and the timing are not valid for a Linux server")
+                 "sysmem fallback); this batch size and the timing are not valid for a Linux server")
         if good:
             chosen = size
             break
     if chosen is None:
-        fail(f"timing: even batch {candidates[-1]} of the longest examples runs out of memory on one GPU")
-        return
+        fail(f"{label}: even batch {candidates[-1]} of the longest examples runs out of memory")
+        return None
 
-    warmup = 2
+    warmup = 2 if steps > 5 else 1
     items = encode_sample(tokenizer, train, chosen * (steps + warmup), max_length, seed)
     items.sort(key=lambda i: len(i["input_ids"]))
     batches = [items[i:i + chosen] for i in range(0, len(items), chosen)]
     random.Random(seed).shuffle(batches)
     if len(batches) <= warmup:
-        fail(f"timing: only {len(batches)} batches of train data; need more than {warmup}")
-        return
+        fail(f"{label}: only {len(batches)} batches of train data; need more than {warmup}")
+        return None
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=2e-4, weight_decay=0.0)
     examples, start = 0, None
     try:
@@ -328,17 +326,155 @@ def timing_run(spec, data_dir, candidates, steps, max_length, seed=42):
                 examples += len(group)
         torch.cuda.synchronize()
     except torch.cuda.OutOfMemoryError:
-        fail(f"timing: batch {chosen} fitted the probe but ran out of memory during the timed steps")
-        return
-    seconds = time.monotonic() - start
-    per_second = examples / seconds
-    hours = PROJECTED_PAIRS * PROJECTED_EPOCHS / per_second / 3600
-    ok(f"timing: {len(batches[warmup:steps + warmup])} optimizer steps at batch {chosen} "
-       f"(after {warmup} warm-up steps): {per_second:.1f} examples/s")
-    print(f"      projected {PROJECTED_PAIRS} pairs x {PROJECTED_EPOCHS} epochs: {hours:.1f} h "
-          f"({hours * 60:.0f} min) of training per run; runs stop at BUDGET_MIN anyway")
+        fail(f"{label}: batch {chosen} fitted the probe but ran out of memory during the timed steps")
+        return None
+    finally:
+        del optimizer
+        free_cuda()
+    per_second = examples / (time.monotonic() - start)
+    ok(f"{label}: {len(batches[warmup:steps + warmup])} optimizer steps at batch {chosen} "
+       f"(after {warmup} warm-up step(s)): {per_second:.2f} examples/s")
+    return chosen, per_second
+
+
+def measure_eval(model, tokenizer, data_dir, n_pairs, batch_size, shots_k=0, label="eval timing"):
+    """Pairs per second of the real evaluation (generation with the prefilled fence + direction
+    scoring) on the first n val pairs."""
+    from experiment_utils import load_pairs
+    from repair_utils import choose_shots, evaluate_split
+
+    model.eval()
+    model.config.use_cache = True
+    shots = ()
+    if shots_k:
+        chosen = choose_shots(load_pairs(data_dir, "train", first=4000), k=shots_k)
+        shots = list(zip(chosen["buggy"], chosen["fixed"]))
+    pairs = load_pairs(data_dir, "val", first=n_pairs)
+    start = time.monotonic()
+    evaluate_split(model, tokenizer, pairs, shots, batch_size)
+    per_second = len(pairs) / (time.monotonic() - start)
+    ok(f"{label}: {'3-shot' if shots_k else 'zero-shot'} evaluation (generation + direction) of {len(pairs)} "
+       f"val pairs at batch {batch_size}: {per_second:.2f} pairs/s")
+    free_cuda()
+    return per_second
+
+
+def timing_run(spec, data_dir, candidates, steps, max_length, eval_batch, eval_pairs, seed=42):
+    """Main config on one GPU: training speed and batch, then evaluation speed. Returns a dict or None."""
+    from experiment_utils import load_pairs
+    from train_repair import build_lora_model
+
+    model_id, revision = split_spec(spec)
+    print(f"\nTiming run: {model_id}, LoRA r16, max length {max_length}, batches {candidates}", flush=True)
+    model, tokenizer = build_lora_model(model_id, revision=revision, rank=16)
+    measured = measure_training(model, tokenizer, load_pairs(data_dir, "train"), candidates, steps, max_length, seed)
+    if measured is None:
+        return None
+    chosen, per_second = measured
+    print(f"      projected {PROJECTED_PAIRS} pairs x 1 epoch: {PROJECTED_PAIRS / per_second / 60:.0f} min of "
+          "training; run_server.sh sizes the main run from this speed")
     print(f"      recommended: BATCH={chosen} ACCUM={EFFECTIVE_BATCH // chosen}  "
           f"(BATCH x ACCUM = {EFFECTIVE_BATCH})", flush=True)
+    result = {"model": spec, "batch": chosen, "examples_per_second": per_second}
+    try:
+        result["eval_pairs_per_second"] = measure_eval(model, tokenizer, data_dir, eval_pairs, eval_batch)
+        result["eval_pairs_per_second_3shot"] = measure_eval(model, tokenizer, data_dir, eval_pairs, eval_batch, 3)
+    except Exception as error:  # noqa: BLE001  (an eval failure must still report the training speed)
+        fail(f"evaluation timing failed: {type(error).__name__}: {error}")
+    del model
+    free_cuda()
+    return result
+
+
+# ---------------------------------------------------------------- 33B over two GPUs (separate process)
+
+
+LOAD_MIN_33B = 15  # minutes to load the 4-bit 33B model (estimate; the measured load time wins if larger)
+
+
+def worker_33b(args):
+    """Runs in its own process with CUDA_VISIBLE_DEVICES = the two GPUs. Prints one RESULT line."""
+    import torch
+
+    from experiment_utils import load_pairs
+    from train_repair import build_lora_model
+
+    result = {"model": args.worker_33b, "gpus_visible": torch.cuda.device_count()}
+    start = time.monotonic()
+    model_id, revision = split_spec(args.worker_33b)
+    model, tokenizer = build_lora_model(model_id, revision=revision, rank=16, quantized=True, multi_gpu=True)
+    result["load_minutes"] = (time.monotonic() - start) / 60
+    result["devices"] = sorted({str(d) for d in model.hf_device_map.values()})
+    measured = measure_training(model, tokenizer, load_pairs(args.data_dir, "train"), [8, 4, 2, 1],
+                                args.timing_steps or 5, args.max_length, label="33B QLoRA timing")
+    result["peak_gib_per_card"] = [torch.cuda.max_memory_allocated(i) / 2**30
+                                   for i in range(torch.cuda.device_count())]
+    if measured is not None:
+        result["batch"], result["examples_per_second"] = measured
+        result["eval_pairs_per_second"] = measure_eval(model, tokenizer, args.data_dir, 8, min(args.eval_batch, 8),
+                                                       label="33B eval timing")
+        result["eval_pairs_per_second_3shot"] = measure_eval(model, tokenizer, args.data_dir, 8,
+                                                             min(args.eval_batch, 8), 3, label="33B eval timing")
+    result["ok"] = measured is not None and not problems
+    print("RESULT " + json.dumps(result), flush=True)
+    return 0 if result["ok"] else 1
+
+
+def check_33b(spec, pair, args):
+    """Load 33B in 4-bit over `pair`, time 5 QLoRA steps and evaluation in a child process. Never adds
+    to `problems`: a failure only tells the operator to set WITH_33B=0."""
+    import subprocess
+
+    print(f"\n33B check: {spec} in 4-bit over GPUs {pair} (separate process; a failure here does not fail "
+          "preflight)", flush=True)
+    env = {**os.environ, "CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": ",".join(pair)}
+    command = [sys.executable, str(Path(__file__).resolve()), "--worker-33b", spec, "--data-dir", args.data_dir,
+               "--max-length", str(args.max_length), "--eval-batch", str(args.eval_batch)]
+    result, code = None, -1
+    try:
+        process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   errors="replace")
+        for line in process.stdout:
+            if line.startswith("RESULT "):
+                result = json.loads(line[len("RESULT "):])
+            elif line.startswith(("OK", "WARN", "FAIL", "      ", "device map", "Traceback", "torch.")) \
+                    or "Error" in line:
+                print("  33B| " + line.rstrip(), flush=True)
+        code = process.wait(timeout=3600)
+    except Exception as error:  # noqa: BLE001
+        print(f"  33B| {type(error).__name__}: {error}")
+    if not result or not result.get("ok"):
+        warn(f"33B check FAILED (exit {code}): the 33B model does not load or train on GPUs {pair}. "
+             "Set WITH_33B=0 in server/config.env; the plan then gives these cards to 6.7B runs.")
+        return {**(result or {}), "ok": False, "fits_window": False}
+    train_min = 4000 / result["examples_per_second"] / 60
+    eval_min = 500 / result["eval_pairs_per_second"] / 60 + 1000 / result["eval_pairs_per_second_3shot"] / 60
+    needed = max(LOAD_MIN_33B, result["load_minutes"]) * 2 + train_min + eval_min
+    peaks = ", ".join(f"{gib:.1f} GiB" for gib in result["peak_gib_per_card"])
+    ok(f"33B: loaded in {result['load_minutes']:.1f} min over {result['devices']}, peak {peaks} per card, "
+       f"batch {result['batch']}, {result['examples_per_second']:.2f} examples/s")
+    print(f"      projected QLoRA on 4000 pairs x 1 epoch: {train_min:.0f} min; evaluation of 500 val + 1000 test: "
+          f"about {eval_min:.0f} min (3-shot speed used for test as the slower bound)")
+    fits = needed + args.margin_min <= args.window_min
+    if fits:
+        ok(f"33B training fits the window: about {needed:.0f} min + {args.margin_min} min margin <= "
+           f"WINDOW_MIN {args.window_min}")
+    else:
+        warn(f"33B is TOO SLOW for the window: about {needed:.0f} min + {args.margin_min} min margin > WINDOW_MIN "
+             f"{args.window_min}. Set WITH_33B=0 in server/config.env (or use a longer WINDOW_MIN).")
+    return {**result, "fits_window": fits, "train_minutes_4000": train_min, "eval_minutes_33b": eval_min}
+
+
+def save_timing(path, key, value):
+    """Merge one measurement into the timing file that run_server.sh plans from."""
+    if not path or value is None:
+        return
+    path = Path(path)
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data[key] = {**value, "measured": time.strftime("%Y-%m-%d %H:%M")}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"      timing written to {path} ({key})", flush=True)
 
 
 # ---------------------------------------------------------------- main
@@ -357,6 +493,8 @@ def parser():
     p.add_argument("--timing-model", help=f"model for the timing run (default {MAIN}; {SMALL} with --smoke)")
     p.add_argument("--timing-steps", type=int, help="optimizer steps to time (default 30; 5 with --smoke)")
     p.add_argument("--max-length", type=int, default=768, help="same as train_repair.py --max-length")
+    p.add_argument("--eval-batch", type=int, default=16, help="batch for the evaluation timing (EVAL_BATCH)")
+    p.add_argument("--eval-timing-pairs", type=int, default=16, help="val pairs for the evaluation timing")
     p.add_argument("--min-free-gb", type=float, help="free GPU memory needed, GiB (default 22; 2.5 with --smoke)")
     p.add_argument("--min-disk-gb", type=float, help="free disk needed, GB (default 60; 10 with --smoke)")
     p.add_argument("--skip-timing", action="store_true", help="skip the timing run")
@@ -364,10 +502,18 @@ def parser():
                    help="load no model on a GPU: skip the forward+backward check and the timing run")
     p.add_argument("--smoke", action="store_true",
                    help="small-GPU rehearsal: lower thresholds, timing on the 1.3B model with few steps")
+    p.add_argument("--timing-json", help="merge the measured speeds into this file (read by run_server.sh)")
+    p.add_argument("--check-33b", metavar="MODEL", help="also load this model in 4-bit over --pair and time QLoRA")
+    p.add_argument("--pair", help='two physical GPU indices for --check-33b, e.g. "4 5"')
+    p.add_argument("--window-min", type=int, default=210, help="window length used to judge the 33B speed")
+    p.add_argument("--margin-min", type=int, default=20)
+    p.add_argument("--worker-33b", help=argparse.SUPPRESS)  # internal: the child process of --check-33b
     return p
 
 
 def main(args):
+    if args.worker_33b:
+        return worker_33b(args)
     smoke = args.smoke
     min_free = args.min_free_gb if args.min_free_gb is not None else (2.5 if smoke else 22)
     min_disk = args.min_disk_gb if args.min_disk_gb is not None else (10 if smoke else 60)
@@ -378,6 +524,9 @@ def main(args):
     gpus = args.gpus.replace(",", " ").split()
     if not gpus:
         raise SystemExit("--gpus is empty")
+    pair = (args.pair or "").replace(",", " ").split()
+    if args.check_33b and len(pair) != 2:
+        raise SystemExit("--check-33b needs --pair with exactly two GPU indices")
 
     # Physical numbering as in nvidia-smi; must be set before torch initialises CUDA.
     previous = os.environ.get("CUDA_VISIBLE_DEVICES")
@@ -418,7 +567,18 @@ def main(args):
     if args.skip_timing:
         print("      timing run skipped (--skip-timing)")
     elif runnable(timing_model, "timing run"):
-        timing_run(timing_model, args.data_dir, candidates, steps, args.max_length)
+        save_timing(args.timing_json, "main", timing_run(timing_model, args.data_dir, candidates, steps,
+                                                         args.max_length, args.eval_batch, args.eval_timing_pairs))
+    if args.check_33b:
+        if not all(p in gpus for p in pair):
+            warn(f"--pair {pair} is not inside --gpus {gpus}; 33B check skipped. Set WITH_33B=0.")
+            save_timing(args.timing_json, "33b", {"ok": False, "fits_window": False, "reason": "pair not in GPUS"})
+        elif not check_model_cache(args.check_33b):
+            warn("33B weights are not in the cache; 33B check skipped. Set WITH_33B=0 or run 2_download.sh.")
+            save_timing(args.timing_json, "33b", {"ok": False, "fits_window": False, "reason": "not cached"})
+        else:
+            free_cuda()
+            save_timing(args.timing_json, "33b", check_33b(args.check_33b, pair, args))
     return finish()
 
 

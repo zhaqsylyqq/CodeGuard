@@ -69,7 +69,8 @@ def load_model(model_id=MODEL_ID, quantized=False, revision=None, dtype="auto", 
     """Load a causal LM and its tokenizer.
 
     quantized: 4-bit NF4 weights with `dtype` compute (QLoRA). multi_gpu: spread the layers over
-    all visible GPUs with device_map="auto" (only for evaluating models too big for one card).
+    all visible GPUs with device_map="auto", which balances them (model parallel inside one process;
+    used for the 33B model, for evaluation and for QLoRA training).
     """
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
@@ -90,6 +91,10 @@ def load_model(model_id=MODEL_ID, quantized=False, revision=None, dtype="auto", 
     elif quantized:
         kwargs["device_map"] = {"": torch.cuda.current_device()}
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
+    if multi_gpu:
+        devices = list(getattr(model, "hf_device_map", {}).values())
+        print("device map: " + ", ".join(f"{d}: {devices.count(d)} modules" for d in sorted(set(devices), key=str)),
+              flush=True)
     if not quantized and not multi_gpu:
         model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.config.pad_token_id = tokenizer.pad_token_id

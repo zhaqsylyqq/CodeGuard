@@ -27,13 +27,17 @@ def lora_target_modules(model):
     return sorted(names)
 
 
-def build_lora_model(model_id, revision=None, rank=16, quantized=False, dtype="auto"):
-    """Base model (bf16, or 4-bit NF4 for QLoRA) with fresh LoRA adapters; gradient checkpointing on."""
+def build_lora_model(model_id, revision=None, rank=16, quantized=False, dtype="auto", multi_gpu=False):
+    """Base model (bf16, or 4-bit NF4 for QLoRA) with fresh LoRA adapters; gradient checkpointing on.
+
+    multi_gpu: the 4-bit model is split by layers over the visible GPUs (device_map="auto") inside
+    this one process; still no DataParallel / DDP.
+    """
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
     from llm_utils import load_model
 
-    model, tokenizer = load_model(model_id, quantized, revision, dtype)
+    model, tokenizer = load_model(model_id, quantized, revision, dtype, multi_gpu)
     model.config.use_cache = False
     if quantized:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
@@ -75,7 +79,8 @@ def train(args, output):
         eval_pairs = load_pairs(args.data_dir, "val", first=args.eval_loss_pairs)
     else:
         eval_pairs = load_pairs(args.data_dir, "val", min(args.eval_loss_pairs, args.limit_pairs), SUBSET_SEED)
-    model, tokenizer = build_lora_model(args.model, args.revision, args.rank, args.quantized, args.dtype)
+    model, tokenizer = build_lora_model(args.model, args.revision, args.rank, args.quantized, args.dtype,
+                                        args.multi_gpu)
     train_items, dropped_train = encode_pairs(tokenizer, train_pairs, args.max_length)
     eval_items, dropped_eval = encode_pairs(tokenizer, eval_pairs, args.max_length)
     print(f"train examples {len(train_items)} (dropped for length {dropped_train}), "
@@ -101,6 +106,11 @@ def train(args, output):
     trainer = Trainer(model=model, args=settings, train_dataset=train_items, eval_dataset=eval_items,
                       data_collator=AnswerCollator(tokenizer.pad_token_id), processing_class=tokenizer,
                       callbacks=[budget])
+    if trainer.args.n_gpu > 1:  # Trainer would wrap the model in DataParallel; the design forbids it
+        raise SystemExit(f"Trainer sees n_gpu={trainer.args.n_gpu}; refusing DataParallel training")
+    if args.multi_gpu:
+        print(f"model split over GPUs {sorted(set(model.hf_device_map.values()), key=str)} in one process "
+              f"(model parallel: {trainer.is_model_parallel}, n_gpu: {trainer.args.n_gpu})", flush=True)
     resume = last_checkpoint(output / "checkpoints")
     if resume:
         print(f"resuming from {resume}", flush=True)
@@ -150,18 +160,26 @@ def load_trained(args, output):
 
     from llm_utils import load_model
 
-    model, tokenizer = load_model(args.model, args.quantized, args.revision, args.dtype)
+    model, tokenizer = load_model(args.model, args.quantized, args.revision, args.dtype, args.multi_gpu)
     return PeftModel.from_pretrained(model, output / "adapter"), tokenizer
 
 
-def run(args):
+def check_gpu_mode(args):
+    """One GPU, unless --multi-gpu: then a 4-bit model is split over all visible GPUs in one process."""
     from llm_utils import require_single_gpu
 
+    if args.multi_gpu and not args.quantized:
+        raise SystemExit("--multi-gpu needs --quantized (only the 4-bit 33B model is split over two GPUs)")
+    if not args.multi_gpu:
+        require_single_gpu()
+
+
+def run(args):
     output = Path(args.output)
     if (output / "metrics.json").exists():
         print(f"{output / 'metrics.json'} exists; nothing to do.")
         return json.loads((output / "metrics.json").read_text(encoding="utf-8"))
-    require_single_gpu()
+    check_gpu_mode(args)
     seed_everything(args.seed)
     output.mkdir(parents=True, exist_ok=True)
     if (output / "train_info.json").exists() and (output / "adapter").is_dir():
@@ -195,6 +213,8 @@ def parser():
     p.add_argument("--output", required=True)
     p.add_argument("--rank", type=int, choices=[8, 16, 32], default=16)
     p.add_argument("--quantized", action="store_true", help="QLoRA: 4-bit NF4 base model")
+    p.add_argument("--multi-gpu", action="store_true",
+                   help='with --quantized: split the model over all visible GPUs (device_map="auto"), one process')
     p.add_argument("--dtype", choices=["auto", "bf16", "fp16", "fp32"], default="auto")
     p.add_argument("--epochs", type=float, default=2)
     p.add_argument("--batch-size", type=int, default=8, help="per-device batch; batch x accumulation = 32")
