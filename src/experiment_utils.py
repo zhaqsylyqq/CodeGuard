@@ -31,8 +31,13 @@ def seed_everything(seed=42):
 # ---------------------------------------------------------------- data
 
 
-def load_pairs(data_dir, split, limit_pairs=None, seed=42):
-    """Read one split of (buggy, fixed) pairs; optionally a seeded random subset of `limit_pairs`."""
+def load_pairs(data_dir, split, limit_pairs=None, seed=42, first=None):
+    """Read one split of (buggy, fixed) pairs.
+
+    first: keep the first `first` pairs in stored order. The tiers are nested prefixes of one seeded
+    shuffle (data_utils.sample_nested), so a smaller prefix is a subset of a larger one and the small
+    tier is a prefix of the full tier. limit_pairs: a seeded random subset (applied after `first`).
+    """
     if split not in {"train", "val", "test"}:
         raise ValueError(f"Unknown split: {split}")
     path = Path(data_dir) / f"{split}.parquet"
@@ -43,6 +48,10 @@ def load_pairs(data_dir, split, limit_pairs=None, seed=42):
         raise ValueError(f"{path} must contain nonempty buggy/fixed pairs")
     if pairs[["buggy", "fixed"]].isna().any().any():
         raise ValueError(f"Missing code in {path}")
+    if first is not None:
+        if first < 1:
+            raise ValueError("first must be positive")
+        pairs = pairs.head(first)
     if limit_pairs is not None:
         if limit_pairs < 1:
             raise ValueError("limit_pairs must be positive")

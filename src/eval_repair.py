@@ -17,8 +17,10 @@ SUBSET_SEED = 42  # --limit-pairs subsets are the same pairs for every run, so r
 
 
 def evaluate_run(model, tokenizer, data_dir, splits, output, shots=(), batch_size=8, limit_pairs=None,
-                 direction=True):
+                 direction=True, first=None):
     """Write {split}_predictions.parquet per split and return {split: summary}.
+
+    first: {split: N} evaluates the first N pairs of that split (a prefix, see load_pairs).
 
     A split whose prediction file already exists is only re-summarized, so a crashed evaluation
     continues where it stopped.
@@ -34,7 +36,7 @@ def evaluate_run(model, tokenizer, data_dir, splits, output, shots=(), batch_siz
             table = pd.read_parquet(path)
             results[split] = {**summarize(table), "eval_seconds": None, "resumed": True}
             continue
-        pairs = load_pairs(data_dir, split, limit_pairs, SUBSET_SEED)
+        pairs = load_pairs(data_dir, split, limit_pairs, SUBSET_SEED, first=(first or {}).get(split))
         start = time.monotonic()
         table, summary = evaluate_split(model, tokenizer, pairs, shots, batch_size, direction)
         seconds = time.monotonic() - start
@@ -72,7 +74,10 @@ def run(args):
 
     shots, shot_ids = (), []
     if args.shots:
-        chosen = choose_shots(load_pairs(args.data_dir, "train"), k=args.shots, seed=args.seed)
+        # --train-pairs limits the pool to a prefix, so a full-tier run with --train-pairs 4000 shows
+        # the same examples as a small-tier run.
+        chosen = choose_shots(load_pairs(args.data_dir, "train", first=args.train_pairs), k=args.shots,
+                              seed=args.seed)
         shots = list(zip(chosen["buggy"], chosen["fixed"]))
         shot_ids = [int(i) for i in chosen["pair_id"]]
     model, tokenizer = load_model(args.model, args.quantized, args.revision, args.dtype, args.multi_gpu)
@@ -82,7 +87,7 @@ def run(args):
     model.config.use_cache = True
     start = time.monotonic()
     results = evaluate_run(model, tokenizer, args.data_dir, args.splits, output, shots, args.batch_size,
-                           args.limit_pairs, not args.no_direction)
+                           args.limit_pairs, not args.no_direction, eval_prefixes(args))
     method = "lora" if args.adapter else ("zero-shot" if not args.shots else f"{args.shots}-shot")
     report = {
         "run": output.name, "task": "repair", "method": method, "model": args.model,
@@ -92,6 +97,17 @@ def run(args):
     }
     write_json(output / "metrics.json", report)
     return report
+
+
+def eval_prefixes(args):
+    return {"val": args.eval_pairs_val, "test": args.eval_pairs_test}
+
+
+def add_subset_flags(p, train_help):
+    """--train-pairs / --eval-pairs-val / --eval-pairs-test: deterministic prefixes of each split."""
+    p.add_argument("--train-pairs", type=int, help=train_help)
+    p.add_argument("--eval-pairs-val", type=int, help="evaluate the first N val pairs (default: all)")
+    p.add_argument("--eval-pairs-test", type=int, help="evaluate the first N test pairs (default: all)")
 
 
 def parser():
@@ -108,6 +124,7 @@ def parser():
     p.add_argument("--output", required=True)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--limit-pairs", type=int, help="evaluate a fixed random subset of this many pairs per split")
+    add_subset_flags(p, "choose the few-shot examples from the first N train pairs (default: all)")
     p.add_argument("--no-direction", action="store_true", help="skip the fix-direction metric")
     p.add_argument("--seed", type=int, default=42)
     return p

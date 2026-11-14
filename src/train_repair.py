@@ -10,7 +10,7 @@ import math
 import time
 from pathlib import Path
 
-from eval_repair import SUBSET_SEED, count_parameters, evaluate_run
+from eval_repair import SUBSET_SEED, add_subset_flags, count_parameters, eval_prefixes, evaluate_run
 from experiment_utils import DEFAULT_DATA_DIR, load_pairs, run_metadata, seed_everything, write_json
 from repair_utils import GENERATION_RULE, encode_example
 
@@ -70,9 +70,11 @@ def train(args, output):
 
     from llm_utils import AnswerCollator, TimeBudgetCallback, resolve_dtype
 
-    train_pairs = load_pairs(args.data_dir, "train", args.limit_pairs, SUBSET_SEED)
-    eval_limit = args.eval_pairs if args.limit_pairs is None else min(args.eval_pairs, args.limit_pairs)
-    eval_pairs = load_pairs(args.data_dir, "val", eval_limit, SUBSET_SEED)
+    train_pairs = load_pairs(args.data_dir, "train", args.limit_pairs, SUBSET_SEED, first=args.train_pairs)
+    if args.limit_pairs is None:  # eval loss on a prefix of val, so it is a subset of the evaluated pairs
+        eval_pairs = load_pairs(args.data_dir, "val", first=args.eval_loss_pairs)
+    else:
+        eval_pairs = load_pairs(args.data_dir, "val", min(args.eval_loss_pairs, args.limit_pairs), SUBSET_SEED)
     model, tokenizer = build_lora_model(args.model, args.revision, args.rank, args.quantized, args.dtype)
     train_items, dropped_train = encode_pairs(tokenizer, train_pairs, args.max_length)
     eval_items, dropped_eval = encode_pairs(tokenizer, eval_pairs, args.max_length)
@@ -118,6 +120,9 @@ def train(args, output):
         "dropped_for_length": {"train": dropped_train, "eval_loss_subset": dropped_eval},
         "eval_loss_pairs": len(eval_items), "steps_per_epoch": steps_per_epoch, "eval_every_steps": eval_every,
         "global_step": trainer.state.global_step, "epochs_done": trainer.state.epoch,
+        # examples the optimizer actually saw (less than train_examples when the time budget stopped it)
+        "train_examples_seen": int(min(trainer.state.global_step * args.batch_size * args.accumulation_steps,
+                                       round((trainer.state.epoch or 0) * len(train_items)))),
         "stopped_by_time_budget": budget.stopped_early, "resumed_from": resume,
         "best_checkpoint": trainer.state.best_model_checkpoint, "best_eval_loss": trainer.state.best_metric,
         "train_seconds": train_seconds, "train_seconds_all_attempts": budget.elapsed(),
@@ -170,7 +175,7 @@ def run(args):
     model.config.use_cache = True
     start = time.monotonic()
     results = evaluate_run(model, tokenizer, args.data_dir, args.splits, output, (), args.eval_batch_size,
-                           args.limit_pairs, not args.no_direction)
+                           args.limit_pairs, not args.no_direction, eval_prefixes(args))
     report = {
         "run": output.name, "task": "repair", "method": "qlora" if args.quantized else "lora",
         "model": args.model, "revision": args.revision, "adapter": str(output / "adapter"),
@@ -198,7 +203,9 @@ def parser():
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--max-length", type=int, default=768)
     p.add_argument("--limit-pairs", type=int, help="use a fixed random subset of this many pairs per split")
-    p.add_argument("--eval-pairs", type=int, default=500, help="val pairs used for eval_loss during training")
+    add_subset_flags(p, "train on the first N train pairs (default: all)")
+    p.add_argument("--eval-loss-pairs", "--eval-pairs", dest="eval_loss_pairs", type=int, default=500,
+                   help="first N val pairs used for eval_loss during training")
     p.add_argument("--time-budget-min", type=float, help="stop training cleanly after this many minutes")
     p.add_argument("--splits", nargs="+", choices=["val", "test"], default=["val", "test"])
     p.add_argument("--no-direction", action="store_true", help="skip the fix-direction metric")
