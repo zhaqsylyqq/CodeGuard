@@ -92,6 +92,13 @@ class Queue:
         log(f"{name}: estimated {estimate_min:.0f} min, {left:.0f} min left")
         return self.execute(name, cmd) == 0
 
+    def wait_for_running(self):
+        """A run left by an earlier queue process (restarted between runs) must finish first."""
+        pattern = "src/train_repair.py|src/eval_repair.py|scripts/measure_card.py"
+        while subprocess.call(["pgrep", "-f", pattern], stdout=subprocess.DEVNULL) == 0:
+            log("waiting for a run started by an earlier queue process")
+            time.sleep(30)
+
     def wait_for_33b(self):
         marker = ROOT / "logs" / "download_33b.log"
         while self.minutes_left() > MARGIN_MIN:
@@ -106,20 +113,41 @@ class Queue:
         return False
 
 
-def train_cmd(python, size, name, m, data, budget, quantized=False, extra=()):
+def choose_prefix(left, m33, m67, load33):
+    """Largest eval prefix k (pairs per split) and QLoRA budget so that qlora_33b + its eval, zs_33b,
+    fs3_33b, zs_6.7b and fs3_6.7b all fit in `left` minutes. Returns (k, budget) or (k, None)."""
+    def evals(k):
+        e33 = 2 * k / m33["eval_pairs_per_second"] / 60 * SAFETY
+        f33 = 2 * k / m33["eval_pairs_per_second_3shot"] / 60 * SAFETY
+        e67 = 2 * k / m67["eval_pairs_per_second"] / 60 * SAFETY
+        f67 = 2 * k / m67["eval_pairs_per_second_3shot"] / 60 * SAFETY
+        return 4 * load33 + 2 * e33 + f33 + 2 * LOAD_MIN["6.7b"] + e67 + f67 + 5
+    for budget in (90, 60, 45, 30):
+        for k in (500, 400, 300, 250, 200, 150, 100):
+            if evals(k) + budget + MARGIN_MIN <= left:
+                return k, budget
+    for k in (500, 300, 200, 100, 50):
+        if evals(k) - 2 * load33 + MARGIN_MIN <= left:
+            return k, None
+    return 50, None
+
+
+def train_cmd(python, size, name, m, data, budget, quantized=False, extra=(), k=500):
     batch = m["batch"]
     cmd = [python, "src/train_repair.py", "--model", SPEC[size].split("@")[0], "--revision", SPEC[size].split("@")[1],
            "--data-dir", data, "--output", f"runs/{name}", "--rank", "16", "--epochs", "1",
            "--batch-size", str(batch), "--accumulation-steps", str(max(1, 32 // batch)),
            "--eval-batch-size", str(m["eval_batch"]), "--time-budget-min", f"{budget:.0f}",
-           "--eval-pairs-val", "500", "--eval-pairs-test", "500", "--seed", "42", *extra]
+           "--eval-pairs-val", str(k), "--eval-pairs-test", str(k), "--eval-loss-pairs", str(k),
+           "--seed", "42", *extra]
     return cmd + (["--quantized"] if quantized else [])
 
 
-def eval_cmd(python, size, name, m, shots, quantized=False):
+def eval_cmd(python, size, name, m, shots, quantized=False, k=500):
     cmd = [python, "src/eval_repair.py", "--model", SPEC[size].split("@")[0], "--revision", SPEC[size].split("@")[1],
            "--data-dir", SMALL, "--output", f"runs/{name}", "--shots", str(shots),
-           "--batch-size", str(m["eval_batch"]), "--seed", "42"]
+           "--batch-size", str(m["eval_batch"]), "--eval-pairs-val", str(k), "--eval-pairs-test", str(k),
+           "--seed", "42"]
     return cmd + (["--quantized"] if quantized else [])
 
 
@@ -127,6 +155,7 @@ def main(args):
     q = Queue(args)
     py = q.python
     log(f"queue start, deadline {q.deadline:%Y-%m-%d %H:%M} UTC, {q.minutes_left():.0f} min left")
+    q.wait_for_running()
     m67 = q.measure("6.7b")
     if not m67.get("ok"):
         log("6.7B measurement failed; stopping")
@@ -146,24 +175,31 @@ def main(args):
         if m33.get("ok"):
             log(f"33B: batch {m33['batch']}, {m33['examples_per_second']:.2f} ex/s, eval batch {m33['eval_batch']}, "
                 f"{m33['eval_pairs_per_second']:.2f} pairs/s (3-shot {m33['eval_pairs_per_second_3shot']:.2f})")
-            eval33 = q.eval_minutes(m33)
-            reserve_c = 2 * LOAD_MIN["33b"] + q.eval_minutes(m33, shots_also=True)
-            budget33 = min(args.budget_33b, q.minutes_left() - MARGIN_MIN - 2 * LOAD_MIN["33b"] - eval33 - reserve_c - 5)
-            if budget33 >= 20:
-                q.run("qlora_33b_r16_4k", train_cmd(py, "33b", "qlora_33b_r16_4k", m33, SMALL, budget33, quantized=True),
-                      2 * LOAD_MIN["33b"] + budget33 + eval33)
+            load33 = max(LOAD_MIN["33b"], m33.get("load_minutes", 0))
+            LOAD_MIN["33b"] = load33
+            k, budget33 = choose_prefix(q.minutes_left(), m33, m67, load33)
+            if budget33:
+                budget33 = min(budget33, args.budget_33b)
+            log(f"33B plan: evaluation prefix {k} val + {k} test pairs for the remaining runs (shared with every "
+                f"run: the first {k} of the small tier's 500), QLoRA budget {budget33} min")
+            e33 = 2 * k / m33["eval_pairs_per_second"] / 60 * SAFETY
+            f33 = 2 * k / m33["eval_pairs_per_second_3shot"] / 60 * SAFETY
+            if budget33:
+                q.run("qlora_33b_r16_4k", train_cmd(py, "33b", "qlora_33b_r16_4k", m33, SMALL, budget33,
+                                                    quantized=True, k=k), 2 * load33 + budget33 + e33)
             else:
-                log(f"qlora_33b_r16_4k: only {budget33:.0f} min of budget would remain; not started")
-            q.run("zs_33b", eval_cmd(py, "33b", "zs_33b", m33, 0, quantized=True), LOAD_MIN["33b"] + eval33)
-            q.run("fs3_33b", eval_cmd(py, "33b", "fs3_33b", m33, 3, quantized=True),
-                  LOAD_MIN["33b"] + EVAL_PAIRS / m33["eval_pairs_per_second_3shot"] / 60 * SAFETY)
+                log("qlora_33b_r16_4k: no time for a useful budget; not started")
+            q.run("zs_33b", eval_cmd(py, "33b", "zs_33b", m33, 0, quantized=True, k=k), load33 + e33)
+            q.run("fs3_33b", eval_cmd(py, "33b", "fs3_33b", m33, 3, quantized=True, k=k), load33 + f33)
+            args.k67 = k
         else:
             log("33B measurement failed (see logs/measure_33b.log); 33B runs skipped")
 
-    # d. 6.7B zero-shot and 3-shot
-    q.run("zs_6.7b", eval_cmd(py, "6.7b", "zs_6.7b", m67, 0), LOAD_MIN["6.7b"] + q.eval_minutes(m67))
-    q.run("fs3_6.7b", eval_cmd(py, "6.7b", "fs3_6.7b", m67, 3),
-          LOAD_MIN["6.7b"] + EVAL_PAIRS / m67["eval_pairs_per_second_3shot"] / 60 * SAFETY)
+    # d. 6.7B zero-shot and 3-shot: 500 + 500 if that still fits, else the shared prefix
+    for name, shots, rate in (("zs_6.7b", 0, m67["eval_pairs_per_second"]),
+                              ("fs3_6.7b", 3, m67["eval_pairs_per_second_3shot"])):
+        k = 500 if LOAD_MIN["6.7b"] + 1000 / rate / 60 * SAFETY + MARGIN_MIN < q.minutes_left() else getattr(args, "k67", 500)
+        q.run(name, eval_cmd(py, "6.7b", name, m67, shots, k=k), LOAD_MIN["6.7b"] + 2 * k / rate / 60 * SAFETY)
 
     # e. 6.7B on N full-tier pairs, sized from the measured speed and the time left
     left = q.minutes_left()
