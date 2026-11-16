@@ -328,3 +328,28 @@ def test_trained_model_does_not_repeat_the_prefilled_fence_and_stops_at_the_clos
     assert raw == FIXED + "\n```"       # stops when the block closes, before "\n<eot>"
     assert n_new == len(FIXED + "\n```")
     assert parse_output(raw) == (FIXED, True)
+
+
+def test_direction_of_a_model_overfitted_on_the_forward_direction_is_above_0_9():
+    """If s_fwd / s_bwd scored the wrong tokens or were misaligned, a model that has learnt only the
+    buggy -> fixed direction would not separate the two; this one must, on nearly every pair."""
+    torch = pytest.importorskip("torch")
+    from llm_utils import AnswerCollator
+    from repair_utils import direction_scores
+
+    tokenizer = make_tokenizer()
+    model = make_model(tokenizer, seed=2)
+    names = ["a", "b", "n", "x", "y", "k", "v", "s", "t", "z"]
+    buggies = [f"{name} = {name} - 1" for name in names]
+    fixeds = [f"{name} = {name} + 1" for name in names]
+    batch = AnswerCollator(tokenizer.pad_token_id)([encode_example(tokenizer, b, f) for b, f in zip(buggies, fixeds)])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    model.train()
+    for _ in range(300):
+        loss = model(**batch).loss
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    s_fwd, s_bwd = direction_scores(model, tokenizer, buggies, fixeds, batch_size=4)
+    accuracy = sum(f > b for f, b in zip(s_fwd, s_bwd)) / len(names)
+    assert accuracy > 0.9
