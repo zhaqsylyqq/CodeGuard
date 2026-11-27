@@ -8,16 +8,113 @@ kept as a secondary track. Data: CTSSB-1M, about 1M single-statement bug fixes m
 Course project: Introduction to NLP (CSCI1407), KBTU, Fall 2026.
 Authors: Zhaxylyk Abdimutalipov, Alrami Dandibay.
 
-Design, experiment matrix and acceptance criteria: [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md).
-Team guide in Russian: [docs/PROJECT_GUIDE_RU.md](docs/PROJECT_GUIDE_RU.md).
-Server window: [docs/SERVER_RUNBOOK.md](docs/SERVER_RUNBOOK.md).
+## Results
 
-## Why repair and not detection
+Every number below comes from a run's `metrics.json` and prediction files (`results/results.csv`,
+`results/headline.json`). Runs are compared only on the test pairs all of them predicted: 500 pairs (the
+small-tier test set) for every run, and the first 2000 full-tier test pairs where a run has them. Brackets:
+95% bootstrap intervals. All fine-tuned runs: rank 16, 1 epoch, unless stated.
 
-Snippets are diff hunks of about 7 lines and the buggy and fixed versions differ by one statement. Shown one
-snippet without the rest of the file, "buggy or fixed?" is mostly not answerable: both trained detection
-baselines sit at chance (table below). Repair is well-posed on the same data and is checked against the real
-developer fix.
+| Run | Model | Method | Training pairs | Test exact match, 500 shared pairs | Test exact match, 2000 pairs |
+|---|---|---|---|---|---|
+| `zs_1.3b` | 1.3B | zero-shot | – | 0.032 [0.018, 0.048] | |
+| `fs3_1.3b` | 1.3B | 3-shot | – | 0.042 [0.026, 0.060] | |
+| `lora_1.3b_r16_4k` | 1.3B | LoRA | 4000 | 0.110 [0.084, 0.140] | |
+| `zs_6.7b` | 6.7B | zero-shot | – | 0.068 [0.048, 0.090] | 0.058 [0.048, 0.069] |
+| `fs3_6.7b` | 6.7B | 3-shot | – | 0.094 [0.070, 0.122] | 0.086 [0.074, 0.099] |
+| `lora_6.7b_r16_4k` | 6.7B | LoRA | 4000 | 0.170 [0.138, 0.204] | |
+| `lora_6.7b_r16` | 6.7B | LoRA | 8000 | 0.202 [0.168, 0.238] | |
+| **`lora_6.7b_r16_50k`** (selected on val) | 6.7B | LoRA | 50,000 | **0.256 [0.218, 0.296]** | **0.258 [0.239, 0.279]** |
+| `zs_33b` | 33B (4-bit) | zero-shot | – | 0.068 [0.046, 0.092] | |
+| `fs3_33b` | 33B (4-bit) | 3-shot | – | 0.108 [0.082, 0.136] | |
+| `qlora_33b_r16_4k` | 33B | QLoRA | 4000 | 0.196 [0.160, 0.232] | |
+| `qlora_33b_r16_25k` | 33B | QLoRA | 25,000 | 0.250 [0.214, 0.292] | |
+
+The final model was chosen on val before any test number was read (`results/selection.json`). On the 150 val
+pairs all full-tier candidates share, `lora_6.7b_r16_50k` and `qlora_33b_r16_25k` tie at 0.233 exact match;
+the rule then prefers fewer trainable parameters (40M vs 123M). Rank, quantization and seed runs, the
+detection track and every other metric are in `results/` and in the figures in `results/figures/`.
+
+![Exact match by method and model size](results/figures/method_by_size.png)
+
+![Exact match vs number of training pairs](results/figures/data_size.png)
+
+**Findings**
+
+1. Fine-tuning beats prompting at every model size: on 2000 test pairs the 6.7B LoRA model fixes 25.8% of
+   bugs exactly, against 5.8% zero-shot and 8.6% with three examples (paired difference to zero-shot +0.200
+   [+0.182, +0.219]).
+2. More training pairs help the most: the 6.7B model goes from 0.170 (4000 pairs) to 0.202 (8000) to 0.256
+   (50,000), and the 33B model from 0.196 (4000) to 0.250 (25,000).
+3. A bigger model helps less than more data: with the same 4000 pairs, 33B QLoRA beats 6.7B LoRA by +0.026
+   [−0.002, +0.056], and the best 33B and best 6.7B runs differ by −0.006 [−0.030, +0.018].
+4. LoRA rank (8, 16, 32) and 4-bit quantization move exact match by at most 0.016 on 4000 pairs, about the
+   same as changing the random seed (0.158 to 0.172 over seeds 42, 43, 44).
+5. With 50,000 pairs the model edits exactly the developer's line in 86% of test pairs but writes the
+   developer's exact fix in only 26%. Isolated detection ("is this snippet buggy?") stays at chance for all
+   four detectors (accuracy 0.499 to 0.523).
+
+**Limitations**
+
+- **Narrow task.** Single-statement bugs only, shown as fragments of about 7 lines without the rest of the
+  file.
+- **Strict metric.** Exact match counts an equivalent but differently written fix as wrong. We did not check
+  how many of the 60% "right line, wrong fix" outputs (`results/error_examples.md`) are correct
+  alternatives.
+- **33B differs in more than size.**
+  - The 33B model always runs in 4-bit, so for 33B size and quantization are not separated.
+  - Its val numbers use 150 pairs instead of 500.
+  - It was trained on 25,000 pairs, not 50,000.
+- **Few seeds and short training.** One seed per configuration, except three seeds for 6.7B r16 on 4000
+  pairs. One epoch for all server runs.
+- **Width of the intervals.** Most comparisons use 500 test pairs, so differences under about 0.03 are
+  within noise.
+- **Data cleaning.** Deduplication is exact-match only; 4.9% of the pool is Python 2 code.
+
+Earlier small-tier numbers (Colab, 2026-11-13) were produced with an older generation rule: the model
+wrote an explanation first and was often cut off inside the code block. They are kept only in
+`results/superseded.csv` and are not compared with the numbers above.
+
+Facts for the defense (every hyperparameter, data sizes, costs, hardware, versions, with file:line):
+[docs/DEFENSE_FACTS.md](docs/DEFENSE_FACTS.md). Design: [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md). Team guide
+in Russian: [docs/PROJECT_GUIDE_RU.md](docs/PROJECT_GUIDE_RU.md). Server window:
+[docs/SERVER_RUNBOOK.md](docs/SERVER_RUNBOOK.md).
+
+## Demo
+
+The demo serves the 1.3B model with the Colab-trained adapter `runs/lora_1.3b_r16_small/adapter` (the 1.3B
+run with the best val exact match: 0.126 on 500 val pairs). It fits a 4 GB laptop GPU: about 3.5 GB in use
+on an RTX 3050 Laptop GPU.
+
+Start it from the repository root, with the adapter present at that path:
+
+```powershell
+# Windows PowerShell
+.venv\Scripts\python app\server.py --port 8000
+```
+
+```bash
+# Git Bash / Linux
+.venv/Scripts/python app/server.py --port 8000      # Linux: .venv/bin/python
+```
+
+Then open http://127.0.0.1:8000, or send a request:
+
+```bash
+curl -s http://127.0.0.1:8000/repair -H "Content-Type: application/json" \
+     -d '{"code": "def average(values):\n    total = sum(values)\n    return total / len(value)"}'
+```
+
+To choose another model or adapter, use the environment variables `CODEGUARD_MODEL`, `CODEGUARD_REVISION`,
+`CODEGUARD_ADAPTER`, `CODEGUARD_QUANTIZED` and `CODEGUARD_DTYPE`. They are documented in `app/server.py`.
+
+Recorded on 2026-11-27 on the RTX 3050 Laptop GPU (seconds = generation time reported by the server):
+
+| Input | Output | Changed lines | Seconds |
+|---|---|---|---|
+| `return total / len(value)` (undefined name) | `return total / len(values)` | 3 | 4.89 |
+| `if age > 18:` (adult at 18) | unchanged | – | 2.78 |
+| `return items[len(items)]` (index out of range) | `return items[-1]` | 4 | 2.04 |
 
 ## Layout
 
@@ -37,15 +134,17 @@ src/
   repair_utils.py         repair prompt, label masking, generation, parsing, repair metrics
   train_repair.py         LoRA / QLoRA training for repair, then evaluation on val and test
   eval_repair.py          zero-shot / 3-shot / adapter evaluation
-  make_report.py          runs/ -> results/*.csv, selection.json (chosen on val only)
+  make_report.py          runs/ -> results/*.csv, selection.json (chosen on val only, shared pairs)
   bilstm.py, llm_baseline.py, train_lora.py   detection track
 scripts/
+  make_figures.py         results/ -> results/figures/*.png (slide figures)
+  compare_shared.py       metrics of several runs on the pair_ids all of them predicted
   download_models.py      pre-fetch weights; print pinned revisions
   preflight.py            environment / GPU / data / model checks and a timing run
-  run_server.sh           the whole server window in one command (one queue per GPU)
+  a100_night.py           the unattended single-A100 queue used for the final runs
 app/                      FastAPI demo (server.py + index.html)
 tests/                    unit and smoke tests on tiny models and synthetic fixtures
-results/                  summary.json, baseline metrics, figures; report tables after real runs
+results/                  report tables, selection.json, error_examples.md, figures
 runs/                     one directory per run: metrics.json, predictions, adapter (not in git)
 ```
 
@@ -78,16 +177,18 @@ python src/make_report.py --runs runs --results results
 Add `--limit-pairs 16` for a quick smoke run (write it to a separate output directory). Every script writes
 `metrics.json` last and skips the run if it already exists, so re-running a command after a crash continues
 where it stopped. Data defaults to `data/processed/small`; pass `--data-dir data/processed/full` for the full
-tier. The server plan (6.7B, rank ablation, QLoRA, 33B) is run by `scripts/run_server.sh`; see the runbook.
+tier.
+
+The final tables and figures were built from the A100 runs and the Colab run:
+
+```powershell
+python src/make_report.py --runs out_server/night_20261117/runs runs --results results
+python scripts/make_figures.py --runs out_server/night_20261117/runs runs --out results/figures
+```
 
 GPU runs on Google Colab (free T4): `python scripts/make_colab_bundle.py` writes
-`dist/codeguard_colab_bundle.zip` (code + both data tiers, no raw data, weights or runs). Upload it to
-`MyDrive/CodeGuard/`, open `notebooks/colab_runs.ipynb` in Colab with a T4 runtime and use Run all: tests,
-preflight with timing, the `SMOKE=1` server rehearsal, the two small-tier insurance runs and, if time
-remains, `zs_6.7b_small_4bit`. Outputs are copied to `MyDrive/CodeGuard/out/` after every stage and finished
-stages are skipped on a re-run.
-
-Demo: `python app/server.py`, then open http://127.0.0.1:8000 (uses the small-tier adapter if it exists).
+`dist/codeguard_colab_bundle.zip`. Upload it to `MyDrive/CodeGuard/`, open `notebooks/colab_runs.ipynb` in a
+T4 runtime and use Run all.
 
 ## Data
 
@@ -107,75 +208,16 @@ Splits are by project (80/10/10); no project or snippet is shared between splits
 tier, and small is a strict subset of full within every split. Python 2 share: 4.9% of the pool.
 Source: `results/summary.json`.
 
-## Results
-
-Only numbers produced by a run with a `metrics.json` are listed. Validation split, small tier.
-
-**Detection (isolated snippet: buggy or fixed?)**
-
-| Model | Accuracy | F1 | ROC-AUC | Source |
-|---|---|---|---|---|
-| TF-IDF + logistic regression | 0.523 | 0.436 | – | `results/baseline_metrics.json` |
-| BiLSTM | 0.499 | 0.209 | 0.4998 | `results/bilstm_metrics.json` |
-
-Both are at chance level (classes are 50/50; with 1000 examples chance spans roughly 0.47–0.53).
-
-**Repair, small tier (Colab T4, 2026-11-13).** Source: `results/results.csv`, `results/headline.json`.
-Selected on val by exact match before test was read: `lora_1.3b_r16_small` (`results/selection.json`).
-95% bootstrap intervals over 500 pairs in brackets. No 3-shot run on the small tier.
-
-Test, headline runs (DeepSeek-Coder-1.3B-instruct):
-
-| Run | Exact match | Localized exact | Localized | Fix direction | Parse ok | Changed | BLEU (copy 93.2) |
-|---|---|---|---|---|---|---|---|
-| `zs_1.3b_small` (zero-shot) | 0.034 [0.018, 0.050] | 0.062 [0.042, 0.084] | 0.580 [0.538, 0.624] | 0.564 [0.520, 0.608] | 0.554 | 0.888 | 78.6 |
-| `lora_1.3b_r16_small` (LoRA r16) | 0.132 [0.104, 0.164] | 0.436 [0.392, 0.480] | 0.456 [0.412, 0.500] | 0.558 [0.514, 0.600] | 0.990 | 0.966 | 89.8 |
-| LoRA minus zero-shot (paired) | +0.098 [0.072, 0.126] | +0.374 [0.326, 0.418] | −0.124 [−0.184, −0.064] | −0.006 [−0.034, 0.020] | | | |
-
-Val, all repair runs:
-
-| Run | Exact match | Localized exact | Localized | Fix direction | Parse ok |
-|---|---|---|---|---|---|
-| `zs_1.3b_small` | 0.018 [0.008, 0.030] | 0.042 [0.026, 0.060] | 0.598 [0.556, 0.640] | 0.500 [0.456, 0.546] | 0.468 |
-| `zs_6.7b_small_4bit` (6.7B zero-shot, 4-bit) | 0.016 [0.006, 0.028] | 0.056 [0.038, 0.078] | 0.750 [0.712, 0.786] | 0.530 [0.488, 0.574] | 0.444 |
-| `lora_1.3b_r16_small` | 0.118 [0.090, 0.148] | 0.450 [0.406, 0.496] | 0.478 [0.434, 0.522] | 0.492 [0.446, 0.534] | 0.990 |
-
-Test numbers of `zs_6.7b_small_4bit` (not used for selection): exact match 0.032 [0.018, 0.048],
-localized exact 0.068 [0.048, 0.090], fix direction 0.580 [0.538, 0.622].
-
-What this shows, and what it does not:
-
-- LoRA on 4000 pairs raises exact match from 3.4% to 13.2% on test and makes the model edit exactly the
-  lines the developer edited 44% of the time instead of 6%. Most bugs (87%) are still not fixed exactly.
-- Fix direction does not change with LoRA and stays close to chance (0.5): val 0.49–0.53, test 0.56–0.58.
-- "Localized" (any overlap) drops with LoRA because the zero-shot model rewrites many lines, which overlaps
-  the developer's line by accident; "localized exact" is the informative one.
-- The zero-shot model writes an explanation before the code, and the generation budget (1.5 × input
-  tokens + 32) often ends inside the code block: only 47–55% of zero-shot outputs have a closed code block,
-  and an unclosed one never matches. A post-hoc check on the pairs where the zero-shot output is well-formed
-  (234 val / 277 test pairs) still gives LoRA +0.073 [0.030, 0.111] (val) and +0.079 [0.043, 0.112] (test)
-  exact match over zero-shot, so the gain is not only output format.
-- The 6.7B model zero-shot in 4-bit is no better than 1.3B zero-shot on exact match.
-- LoRA BLEU (89.8) is below the copy baseline (93.2): BLEU does not separate good from bad repairs here.
-- One seed, small tier, 1.3B model only.
-
-Cost (`results/costs.csv`): 14,991,360 trainable parameters (1.1% of 1.36B), adapter 59 MB, 2 epochs over
-3991 pairs in 35 min at 3.79 examples/s on a T4 (fp16). Figures: `results/figures/headline_test.png`,
-`by_pattern_test.png`, `loss_curve.png`, `detection_val.png`; error-analysis sample:
-`results/error_analysis.csv` (notes to be written by the students).
-
 ## Evaluation protocol in one paragraph
 
-Every run writes predictions for val and test. All comparisons (rank, quantization, model size) are made on
-val; `make_report.py` picks the final configuration by val exact match and writes that choice to
-`results/selection.json` before it reads any test number. The headline table shows test numbers for zero-shot,
-3-shot and the selected LoRA model, with 95% bootstrap intervals and paired bootstrap differences.
-Metrics: exact match after whitespace normalization (headline), localization (did the model edit the line the
-developer edited), copy rate, BLEU next to the copy baseline, and fix-direction accuracy
-(`log P(fixed | buggy) > log P(buggy | fixed)`, chance 0.5).
+Every run writes predictions for val and test. `make_report.py` picks the final configuration by val exact
+match and writes that choice to `results/selection.json` before it reads any test number. Runs are compared
+only on the pair_ids all of them predicted, with the pair count next to every number. Metrics:
+- **exact match** after whitespace normalization (headline);
+- **localized**: the model edited the line the developer edited;
+- **localized_exact**: the model edited exactly the developer's lines and nothing else;
+- copy rate, and BLEU next to the copy baseline;
+- **fix-direction accuracy**: `log P(fixed | buggy) > log P(buggy | fixed)`, chance 0.5.
 
-## Limitations
-
-Single-statement bugs only; fragments without file context; exact match undercounts alternative correct fixes;
-4.9% Python 2 code; deduplication is exact-match only; one seed unless the optional seed runs are done;
-the 33B reference model is evaluated in 4-bit.
+Intervals are 95% percentile bootstrap (2000 resamples); differences are paired bootstraps over the shared
+pairs.
