@@ -175,3 +175,25 @@ def test_runs_with_the_old_generation_rule_are_only_listed_as_superseded(tmp_pat
     assert "zs_1.3b_small_truncated_v1" not in set(pd.read_csv(results / "results.csv")["run"])
     selection = json.loads((results / "selection.json").read_text(encoding="utf-8"))
     assert "zs_1.3b_small_truncated_v1" not in {row["run"] for row in selection["val_table"]}
+
+
+def test_several_runs_dirs_and_numbers_on_shared_pairs(tmp_path):
+    runs, results = make_runs(tmp_path / "w")
+    other = tmp_path / "other_runs"
+    other.mkdir()
+    shutil.move(str(runs / "zs_6.7b"), str(other / "zs_6.7b"))
+    shutil.copytree(other / "zs_6.7b", runs / "zs_6.7b_dup")  # same run under another name is fine
+    assert make_report.run(Namespace(runs=[str(runs), str(other)], results=str(results))) == 0
+    table = pd.read_csv(results / "results.csv")
+    test = table[table.split == "test"].set_index("run")
+    assert "zs_6.7b" in test.index  # read from the second directory
+    shared = set(pd.read_parquet(other / "zs_6.7b" / "test_predictions.parquet")["pair_id"])
+    for name in ("zs_1.3b_small", "lora_1.3b_r16_small"):  # small tier: 30 test pairs, a prefix
+        shared &= set(pd.read_parquet(runs / name / "test_predictions.parquet")["pair_id"])
+    assert set(test["n_shared"]) == {len(shared)}
+    lora = pd.read_parquet(runs / "lora_6.7b_r16" / "test_predictions.parquet")
+    expected = lora[lora.pair_id.isin(shared)]["exact_match"].astype(float).mean()
+    assert test.loc["lora_6.7b_r16", "exact_match_shared"] == pytest.approx(expected)
+    assert test.loc["lora_6.7b_r16", "n"] == 60  # its own numbers stay next to the shared ones
+    patterns = pd.read_csv(results / "by_pattern.csv")
+    assert patterns.groupby("run")["n"].sum().nunique() == 1  # every headline run on the same pairs

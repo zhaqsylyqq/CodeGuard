@@ -1,101 +1,227 @@
 {
-  "selected_run": "lora_1.3b_r16_small",
-  "tier": "small",
+  "selected_run": "lora_6.7b_r16_50k",
+  "tier": "full",
   "split": "test",
   "difference": "selected minus other, paired bootstrap over shared pair_ids (2000 resamples, seed 42)",
   "rows": [
     {
       "role": "selected",
-      "run": "lora_1.3b_r16_small",
-      "tier": "small",
-      "model": "deepseek-ai/deepseek-coder-1.3b-instruct",
+      "run": "lora_6.7b_r16_50k",
+      "tier": "full",
+      "model": "deepseek-ai/deepseek-coder-6.7b-instruct",
       "method": "lora",
       "rank": 16,
       "quantized": false,
-      "n": 500,
+      "n": 2000,
       "exact_match": {
-        "mean": 0.132,
-        "low": 0.104,
-        "high": 0.164
+        "mean": 0.258,
+        "low": 0.239,
+        "high": 0.2785
       },
       "localized": {
-        "mean": 0.456,
-        "low": 0.412,
-        "high": 0.5
+        "mean": 0.869,
+        "low": 0.855,
+        "high": 0.884
       },
       "localized_exact": {
-        "mean": 0.436,
-        "low": 0.39195,
-        "high": 0.48
+        "mean": 0.858,
+        "low": 0.843,
+        "high": 0.8735
       },
       "direction_correct": {
-        "mean": 0.558,
-        "low": 0.514,
-        "high": 0.6
+        "mean": 0.584,
+        "low": 0.562,
+        "high": 0.6055125
       }
     },
     {
       "role": "zero-shot",
-      "run": "zs_1.3b_small",
-      "tier": "small",
-      "model": "deepseek-ai/deepseek-coder-1.3b-instruct",
+      "run": "zs_6.7b",
+      "tier": "full",
+      "model": "deepseek-ai/deepseek-coder-6.7b-instruct",
       "method": "zero-shot",
       "rank": null,
       "quantized": false,
-      "n": 500,
+      "n": 2000,
       "exact_match": {
-        "mean": 0.034,
-        "low": 0.018,
-        "high": 0.05
+        "mean": 0.058,
+        "low": 0.048,
+        "high": 0.069
       },
       "localized": {
-        "mean": 0.58,
-        "low": 0.538,
-        "high": 0.624
+        "mean": 0.4115,
+        "low": 0.3894875,
+        "high": 0.433
       },
       "localized_exact": {
-        "mean": 0.062,
-        "low": 0.04195000000000001,
-        "high": 0.084
+        "mean": 0.1235,
+        "low": 0.1094875,
+        "high": 0.138
       },
       "direction_correct": {
-        "mean": 0.564,
-        "low": 0.52,
-        "high": 0.608
+        "mean": 0.572,
+        "low": 0.5499875000000001,
+        "high": 0.5930124999999999
+      }
+    },
+    {
+      "role": "3-shot",
+      "run": "fs3_6.7b",
+      "tier": "full",
+      "model": "deepseek-ai/deepseek-coder-6.7b-instruct",
+      "method": "3-shot",
+      "rank": null,
+      "quantized": false,
+      "n": 2000,
+      "exact_match": {
+        "mean": 0.0865,
+        "low": 0.0745,
+        "high": 0.0985
+      },
+      "localized": {
+        "mean": 0.284,
+        "low": 0.2645,
+        "high": 0.3025
+      },
+      "localized_exact": {
+        "mean": 0.158,
+        "low": 0.1415,
+        "high": 0.1735
+      },
+      "direction_correct": {
+        "mean": 0.5795,
+        "low": 0.558,
+        "high": 0.601
+      }
+    },
+    {
+      "role": "33b zero-shot",
+      "run": "zs_33b",
+      "tier": "small",
+      "model": "deepseek-ai/deepseek-coder-33b-instruct",
+      "method": "zero-shot",
+      "rank": null,
+      "quantized": true,
+      "n": 500,
+      "exact_match": {
+        "mean": 0.068,
+        "low": 0.046,
+        "high": 0.092
+      },
+      "localized": {
+        "mean": 0.314,
+        "low": 0.274,
+        "high": 0.354
+      },
+      "localized_exact": {
+        "mean": 0.14,
+        "low": 0.11,
+        "high": 0.172
+      },
+      "direction_correct": {
+        "mean": 0.586,
+        "low": 0.544,
+        "high": 0.63
       }
     }
   ],
   "comparisons": [
     {
       "label": "selected vs zero-shot",
-      "a": "lora_1.3b_r16_small",
-      "b": "zs_1.3b_small",
+      "a": "lora_6.7b_r16_50k",
+      "b": "zs_6.7b",
       "split": "test",
-      "n_a": 500,
+      "n_a": 2000,
+      "n_b": 2000,
+      "n": 2000,
+      "exact_match": {
+        "mean": 0.2,
+        "low": 0.182,
+        "high": 0.219,
+        "n": 2000
+      },
+      "localized": {
+        "mean": 0.4575,
+        "low": 0.4325,
+        "high": 0.482,
+        "n": 2000
+      },
+      "localized_exact": {
+        "mean": 0.7345,
+        "low": 0.7145,
+        "high": 0.7535,
+        "n": 2000
+      },
+      "direction_correct": {
+        "mean": 0.012,
+        "low": -0.0035124999999999996,
+        "high": 0.0275,
+        "n": 2000
+      }
+    },
+    {
+      "label": "selected vs 3-shot",
+      "a": "lora_6.7b_r16_50k",
+      "b": "fs3_6.7b",
+      "split": "test",
+      "n_a": 2000,
+      "n_b": 2000,
+      "n": 2000,
+      "exact_match": {
+        "mean": 0.1715,
+        "low": 0.154,
+        "high": 0.1895,
+        "n": 2000
+      },
+      "localized": {
+        "mean": 0.585,
+        "low": 0.5625,
+        "high": 0.608,
+        "n": 2000
+      },
+      "localized_exact": {
+        "mean": 0.7,
+        "low": 0.679,
+        "high": 0.721,
+        "n": 2000
+      },
+      "direction_correct": {
+        "mean": 0.0045,
+        "low": -0.01,
+        "high": 0.019,
+        "n": 2000
+      }
+    },
+    {
+      "label": "selected vs 33b zero-shot",
+      "a": "lora_6.7b_r16_50k",
+      "b": "zs_33b",
+      "split": "test",
+      "n_a": 2000,
       "n_b": 500,
       "n": 500,
       "exact_match": {
-        "mean": 0.098,
-        "low": 0.072,
-        "high": 0.126,
+        "mean": 0.188,
+        "low": 0.152,
+        "high": 0.224,
         "n": 500
       },
       "localized": {
-        "mean": -0.124,
-        "low": -0.184,
-        "high": -0.06395000000000027,
+        "mean": 0.556,
+        "low": 0.51,
+        "high": 0.604,
         "n": 500
       },
       "localized_exact": {
-        "mean": 0.374,
-        "low": 0.326,
-        "high": 0.418,
+        "mean": 0.716,
+        "low": 0.674,
+        "high": 0.756,
         "n": 500
       },
       "direction_correct": {
-        "mean": -0.006,
-        "low": -0.034,
-        "high": 0.02,
+        "mean": 0.016,
+        "low": -0.012,
+        "high": 0.044,
         "n": 500
       }
     }

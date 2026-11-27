@@ -1,0 +1,7 @@
+run,split,model,method,generation,n,exact_match,exact_match_low,exact_match_high,localized_exact,parse_ok,direction_correct
+lora_1.3b_r16_small_truncated_v1,val,deepseek-ai/deepseek-coder-1.3b-instruct,lora,"v1 (no prefill, truncated)",500,0.118,0.09,0.148,0.45,0.99,0.492
+lora_1.3b_r16_small_truncated_v1,test,deepseek-ai/deepseek-coder-1.3b-instruct,lora,"v1 (no prefill, truncated)",500,0.132,0.104,0.164,0.436,0.99,0.558
+zs_1.3b_small_truncated_v1,val,deepseek-ai/deepseek-coder-1.3b-instruct,zero-shot,"v1 (no prefill, truncated)",500,0.018,0.008,0.03,0.042,0.468,0.5
+zs_1.3b_small_truncated_v1,test,deepseek-ai/deepseek-coder-1.3b-instruct,zero-shot,"v1 (no prefill, truncated)",500,0.034,0.018,0.05,0.062,0.554,0.564
+zs_6.7b_small_4bit_truncated_v1,val,deepseek-ai/deepseek-coder-6.7b-instruct,zero-shot,"v1 (no prefill, truncated)",500,0.016,0.006,0.028,0.056,0.444,0.53
+zs_6.7b_small_4bit_truncated_v1,test,deepseek-ai/deepseek-coder-6.7b-instruct,zero-shot,"v1 (no prefill, truncated)",500,0.032,0.018,0.048,0.068,0.478,0.58

@@ -6,7 +6,14 @@ Order (docs/AGENT_GUIDE.md section 6.5):
   3. write results/selection.json (the choice and the val table it used);
   4. only then read test numbers: results.csv, headline.json, by_pattern.csv, detection.csv, costs.csv.
 
-A run counts only if runs/<name>/metrics.json exists. A missing field is written as an empty cell.
+A run counts only if <runs dir>/<name>/metrics.json exists; several runs directories may be given
+(a name found in more than one is taken from the first). A missing field is written as an empty cell.
+
+Runs are compared only on the pair_ids all of them predicted: results.csv carries every run's own
+numbers (n) and its numbers on the pairs shared by all current runs of that split (n_shared, *_shared);
+selection compares the candidates on the val pairs all candidates predicted; paired differences and
+by_pattern.csv use the pairs the compared runs share, with the count next to every number. Runs
+evaluated before the prefilled-fence generation rule are written to superseded.csv only.
 Needs pandas/numpy only (no torch).
 """
 
@@ -19,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 from experiment_utils import bootstrap_ci, paired_bootstrap_diff, write_json
-from repair_utils import GENERATION_RULE
+from repair_utils import GENERATION_RULE, MIN_PATTERN_PAIRS
 
 TRAINED = {"lora", "qlora"}
 REPLICATE = re.compile(r"_s\d+$")  # lora_6.7b_r16_s43 / _s44: seed replicates, never selected
@@ -28,10 +35,12 @@ METRICS = ("n", "exact_match", "changed", "localized", "localized_exact", "parse
            "bleu", "copy_bleu", "copy_exact_match", "localization_chance", "direction_chance")
 INTERVALS = ("exact_match", "localized", "localized_exact", "direction_correct")
 PAIRED = INTERVALS
+SHARED = ("exact_match", "localized_exact", "localized", "parse_ok")  # also computed on the shared pair_ids
 DESCRIBE = ("run", "tier", "model", "method", "rank", "quantized")
 RESULT_COLUMNS = (["section", "run", "split", "tier", "model", "method", "rank", "quantized", "used_for_selection",
                    "selected", "headline", *METRICS]
                   + [f"{m}_{end}" for m in INTERVALS for end in ("low", "high")]
+                  + ["n_shared"] + [f"{m}_shared{end}" for m in SHARED for end in ("", "_low", "_high")]
                   + ["eval_seconds", "pairs_per_second", "trainable_parameters", "total_parameters", "adapter_bytes",
                      "train_seconds", "train_samples_per_second"])
 COSTS = ("trainable_parameters", "total_parameters", "adapter_bytes", "train_seconds",
@@ -50,18 +59,25 @@ def get(data, *keys):
 # ---------------------------------------------------------------- 1. runs
 
 
-def load_runs(runs_dir):
-    """Every runs/<name>/metrics.json, with the run name taken from the directory."""
-    runs = []
-    for path in sorted(Path(runs_dir).glob("*/metrics.json")):
-        try:
-            metrics = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            print(f"skipping {path}: {error}")
-            continue
-        metrics["run"] = path.parent.name
-        runs.append(metrics)
-    return runs
+def load_runs(runs_dirs):
+    """Every <runs dir>/<name>/metrics.json, with the run name taken from the directory. runs_dirs is
+    one directory or a list; a name found in more than one is taken from the first. Returns the runs
+    and {run name: the runs directory it was read from}."""
+    runs, seen = [], {}
+    for runs_dir in ([runs_dirs] if isinstance(runs_dirs, (str, Path)) else runs_dirs):
+        for path in sorted(Path(runs_dir).glob("*/metrics.json")):
+            name = path.parent.name
+            if name in seen:
+                print(f"skipping {path}: {name} already read from {seen[name]}")
+                continue
+            try:
+                metrics = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                print(f"skipping {path}: {error}")
+                continue
+            metrics["run"], seen[name] = name, path.parent.parent
+            runs.append(metrics)
+    return runs, seen
 
 
 def task(run):
@@ -120,19 +136,31 @@ def is_candidate(row):
             and isinstance(row["exact_match"], (int, float)))
 
 
-def select_final(val_rows):
+def select_final(val_rows, locations=None):
     """Highest val exact match among non-replicate LoRA/QLoRA runs of the preferred tier.
 
-    Receives the val table only. Ties: fewer trainable parameters, then run name.
+    Receives the val table only. With locations (run name -> runs dir) and a val prediction file for
+    every candidate, the candidates are compared on the val pair_ids all of them predicted.
+    Ties: fewer trainable parameters, then run name.
     """
     candidates = [row for row in val_rows if is_candidate(row)]
     tiers = {row["tier"] for row in candidates}
     chosen_tier = next((t for t in TIER_PREFERENCE if t in tiers), min(tiers, key=str) if tiers else None)
-    pool = [row for row in candidates if row["tier"] == chosen_tier]
+    pool = [dict(row) for row in candidates if row["tier"] == chosen_tier]
+    shared = None
+    if locations is not None and pool:
+        tables = {row["run"]: read_predictions(locations, row["run"], "val") for row in pool}
+        if all(t is not None for t in tables.values()):
+            shared = set.intersection(*(set(t["pair_id"]) for t in tables.values()))
+            for row in pool:
+                table = tables[row["run"]]
+                row["exact_match"] = float(table[table["pair_id"].isin(shared)]["exact_match"].astype(float).mean())
     pool.sort(key=lambda row: (-row["exact_match"], row["trainable_parameters"] or float("inf"), row["run"]))
     return {
         "selected_run": pool[0]["run"] if pool else None,
-        "criterion": "val exact_match",
+        "criterion": "val exact_match" + (" on the val pair_ids every candidate predicted" if shared else ""),
+        "n_shared_val_pairs": len(shared) if shared else None,
+        "candidate_val_exact_match": {row["run"]: row["exact_match"] for row in pool},
         "tie_breakers": ["fewer trainable parameters", "run name"],
         "tier": chosen_tier,
         "candidates": [row["run"] for row in pool],
@@ -162,14 +190,37 @@ def headline_runs(repair_runs, selection):
     return [(role, run) for role, run in roles if run is not None]
 
 
-def results_table(repair_runs, selection, headline):
+def shared_numbers(repair_runs, locations, split):
+    """{run: {n_shared, metric_shared, metric_shared_low/high}} on the pair_ids that every current run
+    with a prediction file for `split` predicted."""
+    tables = {run["run"]: read_predictions(locations, run["run"], split) for run in repair_runs}
+    tables = {name: table for name, table in tables.items() if table is not None}
+    if not tables:
+        return {}
+    shared = set.intersection(*(set(t["pair_id"]) for t in tables.values()))
+    out = {}
+    for name, table in tables.items():
+        part = table[table["pair_id"].isin(shared)]
+        row = {"n_shared": len(part)}
+        for metric in SHARED:
+            if metric in part.columns and len(part):
+                interval = bootstrap_ci(part[metric].astype(float))
+                row.update({f"{metric}_shared": interval["mean"], f"{metric}_shared_low": interval["low"],
+                            f"{metric}_shared_high": interval["high"]})
+        out[name] = row
+    return out
+
+
+def results_table(repair_runs, selection, headline, locations=None):
     headline_names = {run["run"] for _, run in headline}
     rows = []
     for split in ("val", "test"):
+        shared = shared_numbers(repair_runs, locations, split) if locations is not None else {}
         for run in repair_runs:
             if get(run, "splits", split) is None:
                 continue
             row = split_row(run, split)
+            row.update(shared.get(run["run"], {}))
             trained = run.get("train_seconds") is not None
             for name in COSTS:
                 row[name] = run.get(name) if trained or name == "total_parameters" else None
@@ -192,6 +243,11 @@ def superseded_table(runs):
 
 
 def read_predictions(runs_dir, name, split):
+    """runs_dir: one directory, or a dict run name -> the runs directory that holds it."""
+    if isinstance(runs_dir, dict):
+        if name not in runs_dir:
+            return None
+        runs_dir = runs_dir[name]
     path = Path(runs_dir) / name / f"{split}_predictions.parquet"
     return pd.read_parquet(path) if path.exists() else None
 
@@ -253,15 +309,29 @@ def headline_summary(runs_dir, headline, selection):
             "rows": rows, "comparisons": comparisons}
 
 
-def by_pattern_table(headline):
-    """Per bug type on test, as summarize() stored it (patterns under 30 pairs grouped as OTHER)."""
+def by_pattern_table(headline, locations):
+    """Per bug type on test, on the pair_ids every headline run predicted (bug types with fewer than
+    MIN_PATTERN_PAIRS shared pairs grouped as OTHER); n is the number of shared pairs of that type."""
+    columns = ["role", "run", "split", "sstub_pattern", "n", "exact_match", "exact_match_low", "exact_match_high",
+               "localized", "localized_exact"]
+    tables = [(role, run["run"], read_predictions(locations, run["run"], "test")) for role, run in headline]
+    tables = [(role, name, table) for role, name, table in tables if table is not None]
+    if not tables:
+        return pd.DataFrame([], columns=columns)
+    shared = set.intersection(*(set(t["pair_id"]) for _, _, t in tables))
     rows = []
-    for role, run in headline:
-        for pattern, rates in (get(run, "splits", "test", "by_pattern") or {}).items():
-            rows.append({"role": role, "run": run["run"], "split": "test", "sstub_pattern": pattern,
-                         "n": rates.get("n"), "exact_match": rates.get("exact_match"),
-                         "localized": rates.get("localized")})
-    return pd.DataFrame(rows, columns=["role", "run", "split", "sstub_pattern", "n", "exact_match", "localized"])
+    for role, name, table in tables:
+        part = table[table["pair_id"].isin(shared)]
+        counts = part["sstub_pattern"].value_counts()
+        pattern = part["sstub_pattern"].where(part["sstub_pattern"].map(counts) >= MIN_PATTERN_PAIRS, "OTHER")
+        for value, group in part.groupby(pattern):
+            interval = bootstrap_ci(group["exact_match"].astype(float))
+            rows.append({"role": role, "run": name, "split": "test", "sstub_pattern": value, "n": len(group),
+                         "exact_match": interval["mean"], "exact_match_low": interval["low"],
+                         "exact_match_high": interval["high"],
+                         "localized": float(group["localized"].astype(float).mean()),
+                         "localized_exact": float(group["localized_exact"].astype(float).mean())})
+    return pd.DataFrame(rows, columns=columns)
 
 
 def detection_system(run):
@@ -345,7 +415,7 @@ def print_val_table(val_rows, selection):
 
 
 def run(args):
-    runs = load_runs(args.runs)
+    runs, locations = load_runs(args.runs)
     if not runs:
         print(f"No runs with metrics.json under {args.runs}; nothing to report.")
         return 0
@@ -359,18 +429,18 @@ def run(args):
         print("Superseded (old generation rule, not compared): " + ", ".join(r["run"] for r in superseded))
 
     # Selection: val only, written to disk before any test number is read.
-    fill_missing_intervals(repair, args.runs, "val")
+    fill_missing_intervals(repair, locations, "val")
     val_rows = val_table(repair)
-    selection = select_final(val_rows)
+    selection = select_final(val_rows, locations)
     write_json(results / "selection.json", selection)
     print_val_table(val_rows, selection)
 
     # Test numbers from here on.
-    fill_missing_intervals(repair, args.runs, "test")
+    fill_missing_intervals(repair, locations, "test")
     headline = headline_runs(repair, selection)
-    results_table(repair, selection, headline).to_csv(results / "results.csv", index=False)
-    write_json(results / "headline.json", headline_summary(args.runs, headline, selection))
-    by_pattern_table(headline).to_csv(results / "by_pattern.csv", index=False)
+    results_table(repair, selection, headline, locations).to_csv(results / "results.csv", index=False)
+    write_json(results / "headline.json", headline_summary(locations, headline, selection))
+    by_pattern_table(headline, locations).to_csv(results / "by_pattern.csv", index=False)
     detection_table(detection, repair, results).to_csv(results / "detection.csv", index=False)
     costs_table(repair).to_csv(results / "costs.csv", index=False)
     print(f"\n{len(repair)} repair and {len(detection)} detection runs; tables written to {results}")
@@ -379,7 +449,8 @@ def run(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--runs", default="runs", help="directory with one subdirectory per run")
+    p.add_argument("--runs", nargs="+", default=["runs"],
+                   help="one or more directories with one subdirectory per run (the first wins on a name clash)")
     p.add_argument("--results", default="results", help="where the tables and selection.json are written")
     return p
 
