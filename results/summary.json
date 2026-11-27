@@ -6,47 +6,81 @@
     "real_change": 713790,
     "deduplicated": 647850,
     "no_cross_split_duplicates": 647683,
-    "sampled": 5000
+    "length_filter": 647571,
+    "sample_small": 5000,
+    "sample_full": 57000
   },
   "pool_splits": {
     "train": {
-      "pairs": 517301,
-      "projects": 106446,
+      "pairs": 517210,
+      "projects": 106440,
       "python2_share": 0.049
     },
     "val": {
-      "pairs": 63501,
-      "projects": 13294,
+      "pairs": 63490,
+      "projects": 13292,
       "python2_share": 0.0527
     },
     "test": {
-      "pairs": 66881,
-      "projects": 13299,
+      "pairs": 66871,
+      "projects": 13297,
       "python2_share": 0.049
     }
   },
-  "sample_splits": {
-    "train": {
-      "pairs": 4000,
-      "projects": 3360,
-      "python2_share": 0.053
+  "tier_splits": {
+    "small": {
+      "train": {
+        "pairs": 4000,
+        "projects": 3390,
+        "python2_share": 0.0467
+      },
+      "val": {
+        "pairs": 500,
+        "projects": 429,
+        "python2_share": 0.046
+      },
+      "test": {
+        "pairs": 500,
+        "projects": 413,
+        "python2_share": 0.058
+      }
     },
-    "val": {
-      "pairs": 500,
-      "projects": 427,
-      "python2_share": 0.054
-    },
-    "test": {
-      "pairs": 500,
-      "projects": 417,
-      "python2_share": 0.036
+    "full": {
+      "train": {
+        "pairs": 50000,
+        "projects": 25902,
+        "python2_share": 0.0489
+      },
+      "val": {
+        "pairs": 2000,
+        "projects": 1376,
+        "python2_share": 0.054
+      },
+      "test": {
+        "pairs": 5000,
+        "projects": 2653,
+        "python2_share": 0.0502
+      }
     }
   },
   "python2_share_pool": 0.0494,
-  "python2_share_sample": 0.0514,
+  "python2_share_tiers": {
+    "small": 0.0478,
+    "full": 0.0492
+  },
   "dropped_cross_split_duplicates": {
     "val": 74,
     "test": 93
+  },
+  "length_filter": {
+    "max_chars": 2000,
+    "max_lines": 60,
+    "dropped": 112,
+    "dropped_by_split": {
+      "train": 91,
+      "val": 11,
+      "test": 10
+    }
   },
   "leakage_pool": {
     "train-val": {
@@ -62,18 +96,34 @@
       "shared_snippets": 0
     }
   },
-  "leakage_sample": {
-    "train-val": {
-      "shared_projects": 0,
-      "shared_snippets": 0
+  "leakage_tiers": {
+    "small": {
+      "train-val": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      },
+      "train-test": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      },
+      "val-test": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      }
     },
-    "train-test": {
-      "shared_projects": 0,
-      "shared_snippets": 0
-    },
-    "val-test": {
-      "shared_projects": 0,
-      "shared_snippets": 0
+    "full": {
+      "train-val": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      },
+      "train-test": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      },
+      "val-test": {
+        "shared_projects": 0,
+        "shared_snippets": 0
+      }
     }
   }
 }

@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,18 +104,17 @@ def test_bilstm_training_and_checkpoint(tmp_path):
     assert report["n_examples"] == 4
     assert (output / "best.pt").exists()
     assert (output / "predictions.csv").exists()
+    saved = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
+    assert saved["task"] == "detection"
+    assert {"git_commit", "packages", "args", "gpus"} <= saved.keys()
 
 
-def test_tiny_llama_lora_training_and_reload(tmp_path):
-    pytest.importorskip("peft")
-    from peft import PeftModel
+def make_tiny_llama(tmp_path):
+    """Tiny word-level Llama saved to disk plus one train/val pair: usable as --model and --data-dir."""
     from tokenizers import Tokenizer
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
     from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
-    from llm_utils import load_model
-    from train_lora import parser, run
-    from safetensors.torch import load_file
 
     base = tmp_path / "tiny_base"
     backend = Tokenizer(WordLevel({"<pad>": 0, "<unk>": 1, "</s>": 2, "buggy": 3, "fixed": 4}, unk_token="<unk>"))
@@ -127,12 +127,27 @@ def test_tiny_llama_lora_training_and_reload(tmp_path):
     pairs = pd.DataFrame({"buggy": ["a - b"], "fixed": ["b - a"]})
     for split in ("train", "val"):
         pairs.to_parquet(tmp_path / f"{split}.parquet")
+    return base
+
+
+def test_tiny_llama_lora_training_and_reload(tmp_path):
+    pytest.importorskip("peft")
+    from peft import PeftModel
+    from llm_utils import load_model
+    from train_lora import parser, run
+    from safetensors.torch import load_file
+
+    base = make_tiny_llama(tmp_path)
     output = tmp_path / "lora"
     args = parser().parse_args(["--model", str(base), "--data-dir", str(tmp_path),
                                "--output", str(output), "--epochs", "1", "--batch-size", "2",
-                               "--accumulation-steps", "1", "--max-length", "64"])
+                               "--accumulation-steps", "1", "--max-length", "64",
+                               # fp32: on a GPU without native bf16 (T4) "auto" means fp16, and the fp16
+                               # grad scaler skips the first optimizer step, so one step leaves lora_B at 0
+                               "--dtype", "fp32"])
     report = run(args)
     assert report["n_examples"] == 2
+    assert report["task"] == "detection" and report["stopped_by_time_budget"] is False
     weights = load_file(output / "adapter" / "adapter_model.safetensors")
     assert any(tensor.abs().sum() > 0 for name, tensor in weights.items() if "lora_B" in name)
     model, tokenizer = load_model(str(base))
@@ -145,3 +160,35 @@ def test_tiny_llama_lora_training_and_reload(tmp_path):
         "--data-dir", str(tmp_path), "--output", str(tmp_path / "recheck"), "--max-length", "64",
     ]))
     assert recheck["f1"] == report["f1"]
+    saved = json.loads((tmp_path / "recheck" / "metrics.json").read_text(encoding="utf-8"))
+    assert saved["task"] == "detection"
+    assert {"git_commit", "packages", "args", "gpus"} <= saved.keys()
+
+
+def test_lora_refuses_several_gpus(tmp_path, monkeypatch):
+    pytest.importorskip("peft")
+    from train_lora import parser, run
+
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    output = tmp_path / "lora"
+    args = parser().parse_args(["--model", "unused", "--data-dir", str(tmp_path), "--output", str(output)])
+    with pytest.raises(SystemExit, match="CUDA_VISIBLE_DEVICES"):
+        run(args)
+    assert not output.exists()
+
+
+def test_lora_time_budget_stops_after_first_step(tmp_path):
+    pytest.importorskip("peft")
+    from train_lora import parser, run
+
+    base = make_tiny_llama(tmp_path)
+    output = tmp_path / "lora"
+    args = parser().parse_args(["--model", str(base), "--data-dir", str(tmp_path), "--output", str(output),
+                                "--epochs", "3", "--batch-size", "2", "--accumulation-steps", "1",
+                                "--max-length", "64", "--time-budget-min", "0"])
+    report = run(args)
+    assert report["stopped_by_time_budget"] is True
+    assert max(row["step"] for row in report["history"]) == 1  # 3 steps were planned
+    assert (output / "adapter" / "adapter_model.safetensors").exists()
+    saved = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
+    assert saved["task"] == "detection" and saved["n_examples"] == 2

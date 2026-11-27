@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeGuard Demo</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --panel: #f6f8fa;
+    --accent: #0969da; --accent-fg: #ffffff; --del: #ffebe9; --add: #dafbe1; --error: #cf222e;
+    --note: #fff8c5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --panel: #151b23;
+      --accent: #4493f8; --accent-fg: #0d1117; --del: #4b1f24; --add: #1b3d27; --error: #f85149;
+      --note: #3a3218;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .note { background: var(--note); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
+  textarea, .code, pre { font: 14px/1.45 ui-monospace, Consolas, "Courier New", monospace; }
+  textarea { width: 100%; min-height: 220px; padding: 8px; color: var(--fg); background: var(--panel);
+             border: 1px solid var(--border); border-radius: 6px; tab-size: 4; }
+  button { margin: 8px 0; padding: 8px 16px; font: inherit; color: var(--accent-fg); background: var(--accent);
+           border: 0; border-radius: 6px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  .muted { color: var(--muted); }
+  .error { color: var(--error); }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 700px) { .panels { grid-template-columns: 1fr; } }
+  h2 { font-size: 1rem; margin: 12px 0 4px; }
+  .code { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow-x: auto;
+          padding: 4px 0; white-space: pre; tab-size: 4; }
+  .line { padding: 0 8px; min-height: 1.45em; }
+  .line .n { display: inline-block; width: 2.5em; color: var(--muted); user-select: none; }
+  .line.del { background: var(--del); }
+  .line.add { background: var(--add); }
+  pre { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CodeGuard</h1>
+  <p class="muted">Paste a short Python fragment (up to 60 lines) that contains one buggy statement.</p>
+  <p class="note">The output is a suggestion from a model trained on single-statement fixes. It may be wrong:
+    review it before using it.</p>
+  <textarea id="code" spellcheck="false" placeholder="def is_adult(age):&#10;    return age > 18"></textarea>
+  <button id="go">Suggest fix</button> <span id="status" class="muted"></span>
+  <div id="result" hidden>
+    <div class="panels">
+      <div><h2>Input (changed lines highlighted)</h2><div id="left" class="code"></div></div>
+      <div><h2>Suggested fix (differing lines highlighted)</h2><div id="right" class="code"></div></div>
+    </div>
+    <details><summary>Unified diff</summary><pre id="diff"></pre></details>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+
+function render(box, lines, marked, cls) {
+  box.replaceChildren(...lines.map((text, i) => {
+    const row = document.createElement("div");
+    row.className = marked.has(i + 1) ? "line " + cls : "line";
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = i + 1;
+    row.append(n, text);
+    return row;
+  }));
+}
+
+// Line numbers (1-based) of the suggested fix that the unified diff marks as added.
+function addedLines(diff) {
+  const added = new Set();
+  let line = 0;
+  for (const text of diff.split("\n").slice(2)) {  // skip the ---/+++ header
+    const hunk = text.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+    if (hunk) line = Number(hunk[1]);
+    else if (text.startsWith("+")) added.add(line++);
+    else if (text.startsWith(" ")) line++;
+  }
+  return added;
+}
+
+async function suggest() {
+  const code = $("code").value.replace(/\r\n/g, "\n");
+  $("go").disabled = true;
+  $("status").className = "muted";
+  $("status").textContent = "Running the model...";
+  try {
+    const response = await fetch("/repair", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({code}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      throw new Error(detail || response.statusText);
+    }
+    // changed_lines count only non-blank lines (the server normalizes the code first),
+    // so map them back to line numbers of the text box.
+    const lines = code.split("\n");
+    const nonBlank = [];
+    lines.forEach((text, i) => { if (/\S/.test(text)) nonBlank.push(i + 1); });
+    const changed = new Set(data.changed_lines.map((k) => nonBlank[k - 1]));
+    render($("left"), lines, changed, "del");
+    render($("right"), data.fixed.split("\n"), addedLines(data.diff), "add");
+    $("diff").textContent = data.diff || "(no difference)";
+    $("result").hidden = false;
+    $("status").textContent = `${data.seconds} s, parse_ok: ${data.parse_ok}` + (data.parse_ok ? ""
+      : " (no code block in the model output, showing its raw text)");
+    if (!data.changed_lines.length) $("status").textContent += " - the model left the code unchanged";
+  } catch (error) {
+    $("status").className = "error";
+    $("status").textContent = "Error: " + error.message;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("go").addEventListener("click", suggest);
+$("code").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) suggest(); });
+</script>
+</body>
+</html>

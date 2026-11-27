@@ -1,0 +1,127 @@
+{
+  "task": "detection",
+  "model": "bilstm",
+  "split": "val",
+  "seed": 42,
+  "best_epoch": 5,
+  "settings": {
+    "data_dir": "data/processed/small",
+    "output": "runs/bilstm_small",
+    "epochs": 10,
+    "batch_size": 32,
+    "max_length": 512,
+    "max_vocab": 20000,
+    "embedding_dim": 128,
+    "hidden_dim": 128,
+    "lr": 0.001,
+    "seed": 42,
+    "limit_pairs": null
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.7008927209377289,
+      "val_loss": 0.6951902508735657
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.6961280009746551,
+      "val_loss": 0.6933836340904236
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.6946401352882385,
+      "val_loss": 0.6933683753013611
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.6943208906650543,
+      "val_loss": 0.6932681202888489
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.6941069650650025,
+      "val_loss": 0.6932008266448975
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.6939808547496795,
+      "val_loss": 0.6934467554092407
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.6941253020763397,
+      "val_loss": 0.6932651400566101
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.6939656901359558,
+      "val_loss": 0.6933497786521912
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.6939211776256561,
+      "val_loss": 0.6932039856910706
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.6937801871299744,
+      "val_loss": 0.6932200193405151
+    }
+  ],
+  "args": {
+    "data_dir": "data/processed/small",
+    "output": "runs/bilstm_small",
+    "epochs": 10,
+    "batch_size": 32,
+    "max_length": 512,
+    "max_vocab": 20000,
+    "embedding_dim": 128,
+    "hidden_dim": 128,
+    "lr": 0.001,
+    "seed": 42,
+    "limit_pairs": null
+  },
+  "git_commit": "487f761f8e3f414aa0520a6c0e075414b6964ac6",
+  "packages": {
+    "torch": "2.14.1+cu126",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "accelerate": "1.15.0",
+    "bitsandbytes": "0.50.2",
+    "sacrebleu": "2.6.0",
+    "pandas": "3.0.6",
+    "numpy": "2.5.3"
+  },
+  "python": "3.12.10",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+  ],
+  "environment": {
+    "torch": "2.14.1+cu126",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "accelerate": "1.15.0",
+    "bitsandbytes": "0.50.2",
+    "sacrebleu": "2.6.0",
+    "pandas": "3.0.6",
+    "numpy": "2.5.3"
+  },
+  "accuracy": 0.499,
+  "precision": 0.49624060150375937,
+  "recall": 0.132,
+  "f1": 0.20853080568720378,
+  "roc_auc": 0.499788,
+  "confusion_matrix": [
+    [
+      433,
+      67
+    ],
+    [
+      434,
+      66
+    ]
+  ],
+  "n_examples": 1000
+}

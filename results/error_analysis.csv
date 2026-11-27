@@ -1,0 +1,281 @@
+group,pair_id,sstub_pattern,changed,buggy,fixed,prediction,note
+fixed correctly,221499,SINGLE_STMT,True,"cj, browser = create_cookiejar_and_browser()
+
+def get_first_person_link(current_test,http_test):
+    first_person_link = http_test.soup.find('table','people')[0].find('a')
+    current_test.log(""The first person link is : ""+str(first_person_link))
+    return first_person_link
+    ","cj, browser = create_cookiejar_and_browser()
+
+def get_first_person_link(current_test,http_test):
+    first_person_link = http_test.soup.find('table','people').find('a')
+    current_test.log(""The first person link is : ""+str(first_person_link))
+    return first_person_link
+    ","cj, browser = create_cookiejar_and_browser()
+
+def get_first_person_link(current_test,http_test):
+    first_person_link = http_test.soup.find('table','people').find('a')
+    current_test.log(""The first person link is : ""+str(first_person_link))
+    return first_person_link
+    ",TODO (students): one-line note
+fixed correctly,629548,CHANGE_STRING_LITERAL,True,"    logger.info(""Running the inventory chekcer and send message"")
+
+    # Assuming that something went wrong and Reciepts with 0 crops is not reconciled
+    if crop_receipt.remaining_inventory() > 0:","    logger.info(""Running the inventory checker and send message"")
+
+    # Assuming that something went wrong and Reciepts with 0 crops is not reconciled
+    if crop_receipt.remaining_inventory() > 0:","    logger.info(""Running the inventory checker and send message"")
+
+    # Assuming that something went wrong and Reciepts with 0 crops is not reconciled
+    if crop_receipt.remaining_inventory() > 0:",TODO (students): one-line note
+fixed correctly,459531,SINGLE_STMT,True,"        os.remove(self.symlink)
+
+
+    def read_handler():
+        data = self.read_sync()
+        self._cb(data)
+","        os.remove(self.symlink)
+
+
+    def read_handler(self):
+        data = self.read_sync()
+        self._cb(data)
+","        os.remove(self.symlink)
+
+
+    def read_handler(self):
+        data = self.read_sync()
+        self._cb(data)
+",TODO (students): one-line note
+fixed correctly,279424,CHANGE_IDENTIFIER_USED,True,"                self._imglabel.append(int(label) - 1)
+
+    def __getitem__(self, index):
+        img = Image.open(slef._imgpath[index])
+        img = self.transform(img)
+        cls = self._imglabel[index]
+        return img, cls","                self._imglabel.append(int(label) - 1)
+
+    def __getitem__(self, index):
+        img = Image.open(self._imgpath[index])
+        img = self.transform(img)
+        cls = self._imglabel[index]
+        return img, cls","                self._imglabel.append(int(label) - 1)
+
+    def __getitem__(self, index):
+        img = Image.open(self._imgpath[index])
+        img = self.transform(img)
+        cls = self._imglabel[index]
+        return img, cls",TODO (students): one-line note
+fixed correctly,279659,SAME_FUNCTION_MORE_ARGS,True,"    def process_request(self, request):
+        if request.method not in self.allowed_methods:
+            return
+        content_type = request.META.get('CONTENT_TYPE')
+        if not content_type.startswith(self.content_type):
+            return
+        encoding = request.encoding or settings.DEFAULT_CHARSET","    def process_request(self, request):
+        if request.method not in self.allowed_methods:
+            return
+        content_type = request.META.get('CONTENT_TYPE', '')
+        if not content_type.startswith(self.content_type):
+            return
+        encoding = request.encoding or settings.DEFAULT_CHARSET","    def process_request(self, request):
+        if request.method not in self.allowed_methods:
+            return
+        content_type = request.META.get('CONTENT_TYPE', '')
+        if not content_type.startswith(self.content_type):
+            return
+        encoding = request.encoding or settings.DEFAULT_CHARSET",TODO (students): one-line note
+"right line, wrong fix",167654,ADD_METHOD_CALL,True,"				# Check the syntax before storing
+				txt = dlg.edtImport.Text
+				try:
+					compile(txt.strip(), """", ""exec"")
+					self._classImportDict[frm] = txt
+					showDialog = dlg.Accepted = False
+				except SyntaxError, e:","				# Check the syntax before storing
+				txt = dlg.edtImport.Text
+				try:
+					compile(txt.strip().replace(""\r\n"", ""\n""), """", ""exec"")
+					self._classImportDict[frm] = txt
+					showDialog = dlg.Accepted = False
+				except SyntaxError, e:","				# Check the syntax before storing
+				txt = dlg.edtImport.Text
+				try:
+					compile(txt.strip(), ""<string>"", ""exec"")
+					self._classImportDict[frm] = txt
+					showDialog = dlg.Accepted = False
+				except SyntaxError, e:",TODO (students): one-line note
+"right line, wrong fix",136993,SAME_FUNCTION_LESS_ARGS,True,"            present = self._store.load(aimdens, 'at_weights', i)
+            if not present:
+                # construct atomic weight function
+                self.compute_proatom(self, i, aimdens)
+                aimdens /= self._cache.load('promoldens')
+            aimdens *= self._cache.load('moldens')
+","            present = self._store.load(aimdens, 'at_weights', i)
+            if not present:
+                # construct atomic weight function
+                self.compute_proatom(i, aimdens)
+                aimdens /= self._cache.load('promoldens')
+            aimdens *= self._cache.load('moldens')
+","            present = self._store.load(aimdens, 'at_weights', i)
+            if not present:
+                # construct atomic weight function
+                self.compute_proatom(self, aimdens, i)
+                aimdens /= self._cache.load('promoldens')
+            aimdens *= self._cache.load('moldens')
+",TODO (students): one-line note
+"right line, wrong fix",227280,SINGLE_STMT,True,"		print(""rename_field: "" + (new_fieldname) + "" not found in "" + doctype)
+		return
+
+	if not frappe.db.has_column(doctype, old_fieldname):
+		print(""rename_field: "" + (old_fieldname) + "" not found in table for: "" + doctype)
+		# never had the field?
+		return","		print(""rename_field: "" + (new_fieldname) + "" not found in "" + doctype)
+		return
+
+	if not meta.issingle and not frappe.db.has_column(doctype, old_fieldname):
+		print(""rename_field: "" + (old_fieldname) + "" not found in table for: "" + doctype)
+		# never had the field?
+		return","		print(""rename_field: "" + (new_fieldname) + "" not found in "" + doctype)
+		return
+
+	if not frappe.db.has_column(doctype, new_fieldname):
+		print(""rename_field: "" + (old_fieldname) + "" not found in table for: "" + doctype)
+		# never had the field?
+		return",TODO (students): one-line note
+"right line, wrong fix",452846,CHANGE_NUMERIC_LITERAL,True,"                if p_modulationSensitivity is int:
+                    checks += 1;
+        if not (p_fixedAVDelay is None):
+            for valid in frange(70,200,10):
+                if valid == p_fixedAVDelay:
+                    checks += 1
+        if checks == 4:","                if p_modulationSensitivity is int:
+                    checks += 1;
+        if not (p_fixedAVDelay is None):
+            for valid in frange(70,300,10):
+                if valid == p_fixedAVDelay:
+                    checks += 1
+        if checks == 4:","                if p_modulationSensitivity is int:
+                    checks += 1;
+        if not (p_fixedAVDelay is None):
+            for valid in range(70,200,10):
+                if valid == p_fixedAVDelay:
+                    checks += 1
+        if checks == 4:",TODO (students): one-line note
+"right line, wrong fix",402845,SINGLE_STMT,True,"        # start the demonstration as a child process
+        try:
+            self.logger.info('starting subprocess')
+            cmde = list(self.COMMAND) if isinstance(self.COMMAND, basestring) else self.COMMAND
+            app_proc = subprocess.Popen(cmde, shell=True)
+
+        except OSError as e:","        # start the demonstration as a child process
+        try:
+            self.logger.info('starting subprocess')
+            cmde = [self.COMMAND] if isinstance(self.COMMAND, basestring) else self.COMMAND
+            app_proc = subprocess.Popen(cmde, shell=True)
+
+        except OSError as e:","        # start the demonstration as a child process
+        try:
+            self.logger.info('starting subprocess')
+            cmde = list(self.COMMAND) if isinstance(self.COMMAND, basestring) else list(self.COMMAND)
+            app_proc = subprocess.Popen(cmde, shell=True)
+
+        except OSError as e:",TODO (students): one-line note
+wrong line or copied input,473736,ADD_METHOD_CALL,True,"                    obj_types_with_models.add(obj_type.id)
+
+                    model = ps.get_model(obj_type.model.id, obj_type.model.type)
+                    obj_model = ObjectModel(obj_type.model.type, **{model.type().value: model})
+
+                    with open(os.path.join(data_path, camel_case_to_snake_case(obj_type.id) + "".json""), ""w"")\
+                            as model_file:","                    obj_types_with_models.add(obj_type.id)
+
+                    model = ps.get_model(obj_type.model.id, obj_type.model.type)
+                    obj_model = ObjectModel(obj_type.model.type, **{model.type().value.lower(): model})
+
+                    with open(os.path.join(data_path, camel_case_to_snake_case(obj_type.id) + "".json""), ""w"")\
+                            as model_file:","                    obj_types_with_models.add(obj_type.id)
+
+                    model = ps.get_model(obj_type.model.id, obj_type.model.type)
+                    obj_model = ObjectModel(obj_type.model.type, **{model.type().value: model})
+
+                    with open(os.path.join(data_path, camel_case_to_snake_case(obj_type.id) + "".json""), ""w"", encoding=""utf-8"")
+                            as model_file:",TODO (students): one-line note
+wrong line or copied input,525496,SINGLE_STMT,True,"            write['section_id'] = action.act_section_id.id
+
+        if hasattr(action, 'act_categ_id') and action.act_categ_id:
+            write['categ_ids'] = [4, action.act_categ_id.id]                        
+
+        model_obj.write(cr, uid, [obj.id], write, context)
+        return res","            write['section_id'] = action.act_section_id.id
+
+        if hasattr(action, 'act_categ_id') and action.act_categ_id:
+            write['categ_ids'] = [(4, action.act_categ_id.id)]
+
+        model_obj.write(cr, uid, [obj.id], write, context)
+        return res","            write['section_id'] = action.act_section_id.id
+
+        if hasattr(action, 'act_categ_id') and action.act_categ_id:
+            write['categ_ids'] = [4, action.act_categ_id.id]                        
+
+        model_obj.write(cr, uid, [action.act_section_id.id], write, context)
+        return res",TODO (students): one-line note
+wrong line or copied input,275928,CHANGE_NUMERIC_LITERAL,True,"  return pwn.p32(a) if pwn.context.bits == 32 else pwn.p64(a)
+# alias for u32/u64
+def u(a):
+  return pwn.u32(a) if pwn.context.bits == 64 else pwn.u64(a)
+
+# chain([addr_read, 0xdeadbeef, 0, addr_buf, 0x200, ...]) -> str
+def chain(ls):","  return pwn.p32(a) if pwn.context.bits == 32 else pwn.p64(a)
+# alias for u32/u64
+def u(a):
+  return pwn.u32(a) if pwn.context.bits == 32 else pwn.u64(a)
+
+# chain([addr_read, 0xdeadbeef, 0, addr_buf, 0x200, ...]) -> str
+def chain(ls):","  return pwn.p32(a) if pwn.context.bits == 32 else pwn.p64(a)
+# alias for u32/u64
+def u(a):
+  return pwn.u32(a) if pwn.context.bits == 64 else pwn.u64(a)
+
+# chain([addr_read, 0xdeadbeef, 0, addr_buf, 0x200, ...]) -> str
+def chain(ls):
+  return pwn.chain(ls)
+
+# chain([addr_read, 0xdeadbeef, 0, addr_buf, 0x200, ...]) -> str
+def chain(ls):
+  return pwn.chain(ls)
+
+# chain([addr_read, 0xdeadbeef, 0, addr_buf, 0x20",TODO (students): one-line note
+wrong line or copied input,324086,SINGLE_STMT,True,"
+        try:
+            return cls._info[state].name
+        except KeyError:
+            raise JSAProcError('Unknown state code {0}'.format(state))
+","
+        try:
+            return cls._info[state]
+        except KeyError:
+            raise JSAProcError('Unknown state code {0}'.format(state))
+","
+        try:
+            return cls._info[state].name
+        except (KeyError, AttributeError):
+            raise JSAProcError('Unknown state code {0}'.format(state))
+",TODO (students): one-line note
+wrong line or copied input,358295,SINGLE_STMT,True,"    class Implementation(Payload.Implementation):
+        def __init__(self, meta, member_info, text, media_hash, utc_timestamp):
+            if __debug__:
+                from dispersy.message import Message
+            assert isinstance(member_info, Message.Implementation), member_info
+            assert isinstance(text, unicode), text
+            assert len(text.encode(""UTF-8"")) < 1024, text","    class Implementation(Payload.Implementation):
+        def __init__(self, meta, member_info, text, media_hash, utc_timestamp):
+            if __debug__:
+                from ..dispersy.message import Message
+            assert isinstance(member_info, Message.Implementation), member_info
+            assert isinstance(text, unicode), text
+            assert len(text.encode(""UTF-8"")) < 1024, text","    class Implementation(Payload.Implementation):
+        def __init__(self, meta, member_info, text, media_hash, utc_timestamp):
+            if __debug__:
+                from dispersy.message import Message
+            assert isinstance(member_info, Message.Implementation), member_info, ""member_info""
+            assert isinstance(text, unicode), text
+            assert len(text.encode(""UTF-8"")) < 1024, text",TODO (students): one-line note

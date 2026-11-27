@@ -9,9 +9,15 @@ dist/
 data/raw/
 data/processed/
 runs/
+runs_smoke/
+logs/
+logs_smoke/
+results_smoke/
+out/
 *.zip
 
 # tooling caches
 .ipynb_checkpoints/
 .pytest_cache/
 .ruff_cache/
+out_server/
